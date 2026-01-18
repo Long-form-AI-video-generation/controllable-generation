@@ -1,0 +1,56 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.env
+.venv/
+venv/
+ENV/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Models & checkpoints
+/models/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# Datasets
+/data/
+datasets/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Logs & metrics
+logs/
+wandb/
+runs/
+tensorboard/
+
+# Outputs
+outputs/
+results/
+checkpoints/
+
+# Images
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.exr
+
+# Video
+*.mp4
+*.mov
+*.avi
+*.mkv
