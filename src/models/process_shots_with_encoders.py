@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 sys.path.append(str(Path(__file__).parent.parent))
 from models.encoders import (
     DepthEncoder, SketchEncoder, MotionEncoder, 
-    StyleEncoder, PoseEncoder
+    StyleEncoder, PoseEncoder, MaskEncoder
 )
 
 
@@ -54,6 +54,7 @@ class ControlEncoderProcessor:
             'motion': MotionEncoder(out_channels=256),
             'style': StyleEncoder(out_channels=256),
             'pose': PoseEncoder(out_channels=256),
+            'mask': MaskEncoder(out_channels=256)
         }
         
         for name, encoder in encoders.items():
@@ -196,6 +197,20 @@ class ControlEncoderProcessor:
         tensor = torch.from_numpy(heatmaps)
         tensor = tensor.unsqueeze(0).permute(0, 2, 1, 3, 4)
         return tensor.to(self.device)
+
+    def _prepare_mask(self, mask: np.ndarray) -> torch.Tensor: 
+        """Prepare mask: (T, H, W) -> (1, 1, T, H, W)"""
+        mask = self._sample_frames(mask, self.num_frames)
+        
+        resized = []
+        for t in range(mask.shape[0]):
+            frame = cv2.resize(mask[t], self.resolution, interpolation=cv2.INTER_NEAREST)
+            resized.append(frame)
+        mask = np.stack(resized)
+        
+        tensor = torch.from_numpy(mask.astype(np.float32)) / 255.0
+        tensor = tensor.unsqueeze(0).unsqueeze(0)
+        return tensor.to(self.device)
     
     def process_single_file(self, file_info: dict) -> dict:
         """Process a single NPZ file"""
@@ -263,7 +278,15 @@ class ControlEncoderProcessor:
                     except Exception as e:
                         result['errors'].append(f"pose: {str(e)[:50]}")
             
-            # Save
+                # Mask
+                if 'masks' in data:
+                    try:
+                        tensor = self._prepare_mask(data['masks'])
+                        enc = self.encoders['mask'](tensor)
+                        encoded['mask_encoded'] = enc.cpu().numpy().astype(np.float16)
+                    except Exception as e:
+                        result['errors'].append(f"mask: {str(e)[:50]}")
+                # Save
             if len(encoded) > 0:
                 np.savez_compressed(file_info['output_path'], **encoded)
                 result['success'] = True

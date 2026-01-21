@@ -39,6 +39,8 @@ class EnhancedControlExtractor:
         
      
         self.face_detector = self.load_face_detector()
+
+        self.segmentation_model = self.load_segmentation_model()
         
         print("✓ All models loaded!\n")
     
@@ -186,6 +188,34 @@ class EnhancedControlExtractor:
         print("    ✓ Using default face detector")
         return detector
     
+    def load_segmentation_model(self):
+      
+        print("  Loading Segmentation Model...")
+        
+        try:
+            from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+            sam_checkpoint = self.models_dir / "sam_vit_h_4b8939.pth"
+            
+            if sam_checkpoint.exists():
+                sam = sam_model_registry["vit_h"](checkpoint=str(sam_checkpoint))
+                sam.to(self.device)
+                mask_generator = SamAutomaticMaskGenerator(sam)
+                print("    ✓ Using SAM (Segment Anything)")
+                return {'type': 'sam', 'model': mask_generator}
+        except:
+            pass
+
+
+        #if sam is not available
+        try:
+            from torchvision.models.segmentation import deeplabv3_resnet101
+            model = deeplabv3_resnet101(pretrained=True)
+            model.to(self.device)
+            model.eval()
+            print("    ✓ Using DeepLabV3")
+            return {'type': 'deeplab', 'model': model}
+        except:
+            pass
     # === EXTRACTION METHODS ===
     
     def extract_depth(self, frame, target_size=(360, 640)):
@@ -386,6 +416,107 @@ class EnhancedControlExtractor:
             'scale': np.float16(scale)
         }
 
+
+    def extract_masks(self, frame):
+        """Extract segmentation masks"""
+        if self.segmentation_model is None:
+            return np.zeros(frame.shape[:2], dtype=np.uint8)
+        
+        seg_type = self.segmentation_model['type']
+        
+      
+        if seg_type == 'sam':
+            try:
+                masks = self.segmentation_model['model'].generate(frame)
+                # Combine all masks into one binary mask
+                combined_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                for mask_data in masks:
+                    combined_mask = np.maximum(combined_mask, 
+                                            mask_data['segmentation'].astype(np.uint8) * 255)
+                return combined_mask
+            except:
+                return np.zeros(frame.shape[:2], dtype=np.uint8)
+        
+        
+        elif seg_type == 'deeplab':
+            try:
+                from torchvision import transforms
+                
+                preprocess = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                                    std=[0.229, 0.224, 0.225]),
+                ])
+                
+                input_tensor = preprocess(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                input_batch = input_tensor.unsqueeze(0).to(self.device)
+                
+                with torch.no_grad():
+                    output = self.segmentation_model['model'](input_batch)['out'][0]
+                
+                output_predictions = output.argmax(0).cpu().numpy()
+                
+                
+                person_mask = (output_predictions == 15).astype(np.uint8) * 255
+                
+                return person_mask
+            except:
+                return np.zeros(frame.shape[:2], dtype=np.uint8)
+        
+        
+        elif seg_type == 'grabcut':
+            try:
+                mask = np.zeros(frame.shape[:2], np.uint8)
+                bgd_model = np.zeros((1, 65), np.float64)
+                fgd_model = np.zeros((1, 65), np.float64)
+                
+                
+                h, w = frame.shape[:2]
+                rect = (int(w*0.1), int(h*0.1), int(w*0.8), int(h*0.8))
+                
+                cv2.grabCut(frame, mask, rect, bgd_model, fgd_model, 5, 
+                        cv2.GC_INIT_WITH_RECT)
+                
+               
+                mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
+                
+                return mask2 * 255
+            except:
+                return np.zeros(frame.shape[:2], dtype=np.uint8)
+        
+        return np.zeros(frame.shape[:2], dtype=np.uint8)
+
+    def extract_character_mask(self, frame, face_boxes=None):
+        """
+        Extract character-specific masks (useful for anime)
+        Uses face detection to guide mask extraction
+        """
+        if face_boxes is None or len(face_boxes) == 0:
+            # Fallback to general mask
+            return self.extract_masks(frame)
+        
+      
+        h, w = frame.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        
+        for (x, y, fw, fh) in face_boxes:
+            
+            char_h = int(fh * 7)
+            char_w = int(fw * 2)
+            
+           
+            cx, cy = x + fw // 2, y + fh // 2
+            x1 = max(0, cx - char_w // 2)
+            y1 = max(0, cy - int(char_h * 0.15)) 
+            x2 = min(w, cx + char_w // 2)
+            y2 = min(h, cy + int(char_h * 0.85))
+            
+           
+            center = ((x1 + x2) // 2, (y1 + y2) // 2)
+            axes = ((x2 - x1) // 2, (y2 - y1) // 2)
+            cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+        
+        return mask
 def process_shot_with_all_controls(
     video_path,
     shot,
@@ -423,6 +554,7 @@ def process_shot_with_all_controls(
             'depth': [],
             'edges': [],
             'flow': [],
+            'masks': [],
             'reference_frame': None,
             'style_embedding': None,
             'pose_sequence': [],
@@ -479,7 +611,14 @@ def process_shot_with_all_controls(
                 
                 face_info = extractor.extract_face_info(frame_resized)
                 controls['face_detections'].append(face_info)
-                
+            
+            
+                # Extract mask with face guidance
+                mask = extractor.extract_character_mask(
+                    frame_resized, 
+                    face_boxes=face_info['boxes']
+                )
+                controls['masks'].append(mask)
                 if prev_frame is not None:
                     camera = extractor.estimate_camera_motion(prev_frame, frame_resized)
                     controls['camera_motion'].append(camera)
@@ -502,6 +641,7 @@ def process_shot_with_all_controls(
         save_data = {
             'depth': np.stack(controls['depth']),
             'edges': np.stack(controls['edges']),
+            'masks': np.stack(controls['masks']), 
             'metadata': {
                 'video_id': video_id,
                 'shot_id': shot_idx,
