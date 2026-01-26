@@ -28,7 +28,7 @@ clear_gpu_memory()
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from models.encoders import DepthEncoder, SketchEncoder, MotionEncoder, StyleEncoder, MaskEncoder
+from models.encoders import DepthEncoder, SketchEncoder, MotionEncoder, StyleEncoder, MaskEncoder, SemanticSegmentationEncoder
 
 
 class EncoderTester:
@@ -160,6 +160,14 @@ class EncoderTester:
             expected_output_shape=(B, 256, T, H_out, W_out),
             test_backward=False
         )
+
+        self.test_encoder(
+            SemanticSegmentationEncoder,
+            input_shape=(B, T, H, W),  
+            expected_output_shape=(B, 256, T, H_out, W_out),
+            test_backward=False
+        )
+
         
     
         print(f"\n{'='*60}")
