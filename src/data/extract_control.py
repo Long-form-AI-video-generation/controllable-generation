@@ -189,16 +189,7 @@ class EnhancedControlExtractor:
                 return None
         
         try:
-            
-            # Load model architecture and weights
-            # Note: PiDiNet architecture definition is needed here. 
-            # If you don't have the PiDiNet class definition imported, you can't load the state dict easily into a model structure.
-            # Assuming the user just wanted the download logic for now, but if the class isn't here, it still won't work.
-            # For now, let's assume if we have the path we try to load it, but if code for architecture is missing, we fallback.
-            
-            # Since the original code returned None because "PiDiNet requires model definition", 
-            # downloading the file doesn't fix the missing Class definition.
-            # However, I will leave the file downloaded so the user is one step closer.
+        
             
             print("    ⚠️  PiDiNet requires model definition (not imported), using Canny")
             return None
