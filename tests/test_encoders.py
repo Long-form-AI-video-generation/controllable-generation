@@ -69,7 +69,16 @@ class EncoderTester:
             
           
             print(f"\n  Creating test input...")
-            x = torch.randn(*input_shape, device=self.device, dtype=torch.float32)
+            if encoder_class.__name__ == "SemanticSegmentationEncoder":
+                x = torch.randint(
+                    low=0,
+                    high=150,  
+                    size=input_shape,
+                    device=self.device,
+                    dtype=torch.long
+                )
+            else:
+                x = torch.randn(*input_shape, device=self.device, dtype=torch.float32)
             print(f"✓ Input created: {x.shape}")
             print(f"  Memory after input: {torch.cuda.memory_allocated()/1e9:.2f} GB")
             
