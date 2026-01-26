@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 sys.path.append(str(Path(__file__).parent.parent))
 from models.encoders import (
     DepthEncoder, SketchEncoder, MotionEncoder, 
-    StyleEncoder, PoseEncoder
+    StyleEncoder, PoseEncoder, NormalEncoder
 )
 
 
@@ -54,6 +54,7 @@ class ControlEncoderProcessor:
             'motion': MotionEncoder(out_channels=256),
             'style': StyleEncoder(out_channels=256),
             'pose': PoseEncoder(out_channels=256),
+            'normal': NormalEncoder(out_channels=256),
         }
         
         for name, encoder in encoders.items():
