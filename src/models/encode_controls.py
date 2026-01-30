@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 sys.path.append(str(Path(__file__).parent.parent))
 from models.encoders import (
     DepthEncoder, SketchEncoder, MotionEncoder, 
-    StyleEncoder, PoseEncoder
+    StyleEncoder, PoseEncoder, MaskEncoder
 )
 
 
@@ -25,7 +25,7 @@ class ControlEncoderProcessor:
         output_dir: str,
         device: str = 'cuda',
         num_frames: int = 8,
-        resolution: tuple = (512, 512)
+        resolution: tuple = (256, 256)
     ):
         self.control_base = Path(control_base_dir)
         self.output_dir = Path(output_dir)
@@ -35,10 +35,10 @@ class ControlEncoderProcessor:
         self.num_frames = num_frames
         self.resolution = resolution
         
-        # Initialize encoders
+      
         self.encoders = self._init_encoders()
         
-        # Find all NPZ files
+        
         self.npz_files = self._find_all_npz_files()
         print(f"Found {len(self.npz_files)} NPZ files to process\n")
     
@@ -54,6 +54,7 @@ class ControlEncoderProcessor:
             'motion': MotionEncoder(out_channels=256),
             'style': StyleEncoder(out_channels=256),
             'pose': PoseEncoder(out_channels=256),
+            'mask': MaskEncoder(out_channels=256)
         }
         
         for name, encoder in encoders.items():
@@ -87,7 +88,7 @@ class ControlEncoderProcessor:
         """Sample frames uniformly"""
         current_frames = data.shape[0]
         if current_frames <= target_frames:
-            # Pad if needed
+         
             if current_frames < target_frames:
                 pad_width = [(0, target_frames - current_frames)] + [(0, 0)] * (data.ndim - 1)
                 data = np.pad(data, pad_width, mode='edge')
@@ -100,7 +101,6 @@ class ControlEncoderProcessor:
         """Prepare depth: (T, H, W) -> (1, 1, T, H, W)"""
         depth = self._sample_frames(depth, self.num_frames)
         
-        # Resize
         resized = []
         for t in range(depth.shape[0]):
             frame = cv2.resize(depth[t], self.resolution, interpolation=cv2.INTER_LINEAR)
@@ -126,25 +126,47 @@ class ControlEncoderProcessor:
         return tensor.to(self.device)
     
     def _prepare_flow(self, flow: np.ndarray) -> torch.Tensor:
-        """Prepare flow: (T, H, W, 2) -> (1, 2, T, H, W)"""
+        """Prepare flow: (T, H, W, 2) -> (1, 2, T, H, W) with safety checks"""
+        
+       
+        if flow.shape[0] == 0:
+          
+            return torch.zeros(1, 2, self.num_frames, *self.resolution, device=self.device)
+       
+        if not np.isfinite(flow).all():
+            
+            flow = np.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        
         flow = self._sample_frames(flow, self.num_frames)
         
-        # Resize with flow scaling
+       
         resized = []
         h_scale = self.resolution[1] / flow.shape[1]
         w_scale = self.resolution[0] / flow.shape[2]
         
         for t in range(flow.shape[0]):
-            flow_x = cv2.resize(flow[t, :, :, 0], self.resolution, interpolation=cv2.INTER_LINEAR)
-            flow_y = cv2.resize(flow[t, :, :, 1], self.resolution, interpolation=cv2.INTER_LINEAR)
-            flow_x *= w_scale
-            flow_y *= h_scale
-            resized.append(np.stack([flow_x, flow_y], axis=-1))
+            try:
+                flow_x = cv2.resize(
+                    flow[t, :, :, 0].astype(np.float32), 
+                    self.resolution, 
+                    interpolation=cv2.INTER_LINEAR
+                )
+                flow_y = cv2.resize(
+                    flow[t, :, :, 1].astype(np.float32), 
+                    self.resolution, 
+                    interpolation=cv2.INTER_LINEAR
+                )
+                flow_x *= w_scale
+                flow_y *= h_scale
+                resized.append(np.stack([flow_x, flow_y], axis=-1))
+            except Exception as e:
+                
+                resized.append(np.zeros((self.resolution[1], self.resolution[0], 2), dtype=np.float32))
         
         flow = np.stack(resized)
         tensor = torch.from_numpy(flow.astype(np.float32))
-        tensor = tensor.permute(0, 3, 1, 2)
-        tensor = tensor.unsqueeze(0).permute(0, 2, 1, 3, 4)
+        tensor = tensor.permute(0, 3, 1, 2).unsqueeze(0).permute(0, 2, 1, 3, 4)
         return tensor.to(self.device)
     
     def _prepare_reference(self, ref: np.ndarray) -> torch.Tensor:
@@ -155,11 +177,11 @@ class ControlEncoderProcessor:
         return tensor.to(self.device)
     
     def _keypoints_to_heatmap(self, keypoints: np.ndarray, sigma: float = 5.0) -> np.ndarray:
-        """Convert pose keypoints to heatmaps"""
+        """Convert pose keypoints to heatmaps with safety checks"""
         T, num_joints, _ = keypoints.shape
         H, W = self.resolution[1], self.resolution[0]
         
-        # 3 channels: head, torso, limbs
+      
         heatmaps = np.zeros((T, 3, H, W), dtype=np.float32)
         
         head_joints = [0, 1, 2, 3, 4]
@@ -175,17 +197,29 @@ class ControlEncoderProcessor:
                     
                     x, y, conf = keypoints[t, joint_idx]
                     
-                    if conf < 0.3:
-                        continue
+                  
+                    if not np.isfinite(x) or not np.isfinite(y) or not np.isfinite(conf):
+                        continue  
                     
+                    if conf < 0.3:
+                        continue  
+                    
+                   
+                    x = np.clip(x, 0.0, 1.0)
+                    y = np.clip(y, 0.0, 1.0)
+                    
+                   
                     x_norm = int(x * W)
                     y_norm = int(y * H)
                     
-                    if 0 <= x_norm < W and 0 <= y_norm < H:
-                        # Create gaussian
-                        y_grid, x_grid = np.ogrid[:H, :W]
-                        gaussian = np.exp(-((x_grid - x_norm)**2 + (y_grid - y_norm)**2) / (2 * sigma**2))
-                        heatmaps[t, ch] = np.maximum(heatmaps[t, ch], gaussian)
+                    
+                    x_norm = np.clip(x_norm, 0, W - 1)
+                    y_norm = np.clip(y_norm, 0, H - 1)
+                    
+                    
+                    y_grid, x_grid = np.ogrid[:H, :W]
+                    gaussian = np.exp(-((x_grid - x_norm)**2 + (y_grid - y_norm)**2) / (2 * sigma**2))
+                    heatmaps[t, ch] = np.maximum(heatmaps[t, ch], gaussian)
         
         return heatmaps
     
@@ -195,6 +229,20 @@ class ControlEncoderProcessor:
         heatmaps = self._keypoints_to_heatmap(pose)
         tensor = torch.from_numpy(heatmaps)
         tensor = tensor.unsqueeze(0).permute(0, 2, 1, 3, 4)
+        return tensor.to(self.device)
+
+    def _prepare_mask(self, mask: np.ndarray) -> torch.Tensor: 
+        """Prepare mask: (T, H, W) -> (1, 1, T, H, W)"""
+        mask = self._sample_frames(mask, self.num_frames)
+        
+        resized = []
+        for t in range(mask.shape[0]):
+            frame = cv2.resize(mask[t], self.resolution, interpolation=cv2.INTER_NEAREST)
+            resized.append(frame)
+        mask = np.stack(resized)
+        
+        tensor = torch.from_numpy(mask.astype(np.float32)) / 255.0
+        tensor = tensor.unsqueeze(0).unsqueeze(0)
         return tensor.to(self.device)
     
     def process_single_file(self, file_info: dict) -> dict:
@@ -207,18 +255,17 @@ class ControlEncoderProcessor:
         }
         
         try:
-            # Skip if already exists
+            
             if file_info['output_path'].exists():
                 result['success'] = True
                 result['size_mb'] = file_info['output_path'].stat().st_size / 1e6
                 return result
-            
-            # Load data
+           
             data = np.load(file_info['input_path'], allow_pickle=True)
             encoded = {}
             
             with torch.no_grad():
-                # Depth
+               
                 if 'depth' in data:
                     try:
                         tensor = self._prepare_depth(data['depth'])
@@ -227,7 +274,7 @@ class ControlEncoderProcessor:
                     except Exception as e:
                         result['errors'].append(f"depth: {str(e)[:50]}")
                 
-                # Edges
+               
                 if 'edges' in data:
                     try:
                         tensor = self._prepare_edges(data['edges'])
@@ -235,17 +282,27 @@ class ControlEncoderProcessor:
                         encoded['sketch_encoded'] = enc.cpu().numpy().astype(np.float16)
                     except Exception as e:
                         result['errors'].append(f"edges: {str(e)[:50]}")
-                
-                # Flow
-                if 'flow' in data:
+               
+                if 'flow' in data and data['flow'].shape[0] > 0:
                     try:
                         tensor = self._prepare_flow(data['flow'])
                         enc = self.encoders['motion'](tensor)
                         encoded['motion_encoded'] = enc.cpu().numpy().astype(np.float16)
                     except Exception as e:
                         result['errors'].append(f"flow: {str(e)[:50]}")
+                        
+                        encoded['motion_encoded'] = np.zeros(
+                            (1, 256, self.num_frames, 128, 128), 
+                            dtype=np.float16
+                        )
+                else:
+                   
+                    encoded['motion_encoded'] = np.zeros(
+                        (1, 256, self.num_frames, 128, 128), 
+                        dtype=np.float16
+                    )
                 
-                # Reference frame
+             
                 if 'reference_frame' in data:
                     try:
                         tensor = self._prepare_reference(data['reference_frame'])
@@ -254,7 +311,6 @@ class ControlEncoderProcessor:
                     except Exception as e:
                         result['errors'].append(f"style: {str(e)[:50]}")
                 
-                # Pose
                 if 'pose_sequence' in data:
                     try:
                         tensor = self._prepare_pose(data['pose_sequence'])
@@ -262,13 +318,35 @@ class ControlEncoderProcessor:
                         encoded['pose_encoded'] = enc.cpu().numpy().astype(np.float16)
                     except Exception as e:
                         result['errors'].append(f"pose: {str(e)[:50]}")
+                       
+                        encoded['pose_encoded'] = np.zeros(
+                            (1, 256, self.num_frames, 128, 128), 
+                            dtype=np.float16
+                        )
+                else:
+                    
+                    encoded['pose_encoded'] = np.zeros(
+                        (1, 256, self.num_frames, 128, 128), 
+                        dtype=np.float16
+                    )
             
-            # Save
-            if len(encoded) > 0:
-                np.savez_compressed(file_info['output_path'], **encoded)
-                result['success'] = True
-                result['encodings'] = len(encoded)
-                result['size_mb'] = file_info['output_path'].stat().st_size / 1e6
+               
+                if 'masks' in data:
+                    try:
+                        tensor = self._prepare_mask(data['masks'])
+                        enc = self.encoders['mask'](tensor)
+                        encoded['mask_encoded'] = enc.cpu().numpy().astype(np.float16)
+                    except Exception as e:
+                        result['errors'].append(f"mask: {str(e)[:50]}")
+                
+               
+                
+               
+                if len(encoded) >= 4:  
+                    np.savez_compressed(file_info['output_path'], **encoded)
+                    result['success'] = True
+                    result['encodings'] = len(encoded)
+                    result['size_mb'] = file_info['output_path'].stat().st_size / 1e6
             
         except Exception as e:
             result['errors'].append(f"general: {str(e)[:100]}")
@@ -358,7 +436,7 @@ def main():
                        help='Output directory for encoded features')
     parser.add_argument('--num_frames', type=int, default=8,
                        help='Number of frames to sample')
-    parser.add_argument('--resolution', type=int, nargs=2, default=[512, 512],
+    parser.add_argument('--resolution', type=int, nargs=2, default=(256, 256),
                        help='Target resolution (W H)')
     
     args = parser.parse_args()
