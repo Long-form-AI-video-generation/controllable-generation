@@ -1,7 +1,7 @@
 # models/control_adapter.py
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F 
 class ControlAdapter(nn.Module):
     """
     Adapts multi-modal control features to WAN's DiT dimension
@@ -70,9 +70,9 @@ class ControlAdapter(nn.Module):
         """
         Args:
             control_features: Dict with encoded controls
-                             Each shape: (B, 256, T, H, W)
+                            Each shape: (B, 256, T, H, W)
         Returns:
-            control_signal: (B, N, 2048) where N=T*H*W
+            control_signal: (B, N, 2048) where N=T*H'*W' (spatially downsampled)
         """
         # Sort keys for consistent ordering
         sorted_keys = sorted(control_features.keys())
@@ -82,20 +82,21 @@ class ControlAdapter(nn.Module):
                 f"Expected {self.num_controls} controls, got {len(sorted_keys)}"
             )
         
-      
         first_feat = control_features[sorted_keys[0]]
         B, C, T, H, W = first_feat.shape
-        N = T * H * W
+        
+      
+        target_spatial = 16  
         
         projected = []
         
         for idx, key in enumerate(sorted_keys):
             feat = control_features[key]  
-            
-          
-            feat = feat.flatten(2).transpose(1, 2)
+            # Spatial pooling: [B, 256, T, H, W] → [B, 256, T, 16, 16]
+            feat = F.adaptive_avg_pool3d(feat, (T, target_spatial, target_spatial))
             
            
+            feat = feat.flatten(2).transpose(1, 2) 
             if self.use_gradient_checkpointing and self.training:
                 proj = torch.utils.checkpoint.checkpoint(
                     self.control_projections[idx],
@@ -104,16 +105,16 @@ class ControlAdapter(nn.Module):
                 )
             else:
                 proj = self.control_projections[idx](feat)
-            
-          
+         
             gate = torch.sigmoid(self.modality_gates[idx])
             proj = proj * gate
             
             projected.append(proj)
         
-    
-        combined = torch.cat(projected, dim=-1)
-       
+        
+        combined = torch.cat(projected, dim=-1)  # [B, N, 6×1024]
+        
+      
         if self.use_gradient_checkpointing and self.training:
             control_signal = torch.utils.checkpoint.checkpoint(
                 self.fusion,
@@ -123,10 +124,10 @@ class ControlAdapter(nn.Module):
         else:
             control_signal = self.fusion(combined)
         
-        
+        # Scale
         control_signal = control_signal * self.scale.tanh()
         
-        return control_signal
+        return control_signal  # [B, T×16×16, 2048] = [B, 2048, 2048]
     
     def get_modality_weights(self) -> dict:
         """Get learned importance of each modality"""
