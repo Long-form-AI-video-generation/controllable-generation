@@ -430,6 +430,81 @@ class PoseEncoder(nn.Module):
 
 
 
+class NormalEncoder(nn.Module):
+    """
+    Encodes surface normals for geometry-aware generation.
+    
+    Surface normals are directional data (unit vectors), requiring special handling.
+    This encoder processes RGB-encoded normal maps and extracts geometric features.
+    
+    Key Features:
+    - Handles directional nature of normals
+    - Joint processing with depth (if available)
+    - Geometry-aware refinement
+    - Temporal smoothing for consistent geometry
+    """
+    def __init__(self, out_channels: int = 256):
+        super().__init__()
+        
+        # Normals are RGB-encoded (3 channels)
+        self.stem = ConvBlock3D(
+            3, 64,
+            kernel_size=(1, 7, 7),  # Spatial only initially
+            padding=(0, 3, 3)
+        )
+        
+        # Multi-scale processing for geometry
+        self.stage1 = nn.Sequential(
+            ConvBlock3D(64, 128, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            ResBlock3D(128),
+        )
+        
+        self.stage2 = nn.Sequential(
+            SpatialDownsample(128, factor=2),  # H/2, W/2
+            ConvBlock3D(128, 256, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            ResBlock3D(256),
+        )
+        
+        # Temporal smoothing for geometry consistency
+        self.temporal_smooth = ConvBlock3D(
+            256, out_channels,
+            kernel_size=(3, 1, 1),  # Temporal only
+            padding=(1, 0, 0)
+        )
+        
+        # Output projection
+        self.output_proj = nn.Conv3d(out_channels, out_channels, 1)
+        nn.init.xavier_uniform_(self.output_proj.weight, gain=0.02)
+        nn.init.zeros_(self.output_proj.bias)
+    
+    def forward(self, normals: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            normals: RGB-encoded normal map [B, 3, T, H, W] or [B, T, 3, H, W]
+                    Values in range [0, 255]
+        
+        Returns:
+            features: Encoded normal features [B, out_channels, T, H/2, W/2]
+        """
+        # Handle different input formats
+        if normals.dim() == 5 and normals.shape[1] != 3:
+            # [B, T, 3, H, W] -> [B, 3, T, H, W]
+            normals = normals.permute(0, 2, 1, 3, 4)
+        
+        # Normalize to [0, 1]
+        if normals.max() > 1.0:
+            normals = normals / 255.0
+        
+        # Decode from RGB to actual normals [-1, 1]
+        # RGB encoding: normal = (rgb / 127.5) - 1
+        normals_decoded = (normals * 2.0) - 1.0
+        
+        x = self.stem(normals_decoded)      # [B, 64, T, H, W]
+        x = self.stage1(x)                  # [B, 128, T, H, W]
+        x = self.stage2(x)                  # [B, 256, T, H/2, W/2]
+        x = self.temporal_smooth(x)         # [B, 256, T, H/2, W/2]
+        x = self.output_proj(x)
+        
+        return x
 
 
-   

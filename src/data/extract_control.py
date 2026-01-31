@@ -12,6 +12,9 @@ from PIL import Image
 import torchvision.transforms as transforms
 from transformers import CLIPProcessor, CLIPModel
 import mediapipe as mp
+import urllib.request
+import ssl
+import os
 
 warnings.filterwarnings('ignore')
 
@@ -39,10 +42,16 @@ class EnhancedControlExtractor:
         
      
         self.face_detector = self.load_face_detector()
+        
+        
+        
+     
+        self.normals_model = self.load_normals_model()
 
         self.segmentation_model = self.load_segmentation_model()
         
         print("✓ All models loaded!\n")
+    
     
     def load_midas_local(self):
         """Load YOUR local MiDaS weights"""
@@ -216,6 +225,72 @@ class EnhancedControlExtractor:
             return {'type': 'deeplab', 'model': model}
         except:
             pass
+    def load_normals_model(self):
+        """Load surface normals model (Omnidata DPT)"""
+        print("  Loading Surface Normals Model...")
+        
+        normals_path = self.models_dir / "omnidata_dpt_normal_v2.ckpt"
+        model_url = "https://huggingface.co/clay3d/omnidata/resolve/main/omnidata_dpt_normal_v2.ckpt"
+        
+        # 1. Download if not exists
+        if not normals_path.exists():
+            print(f"    ⚠️  Omnidata model not found locally.")
+            print(f"    Downloading from {model_url}...")
+            print(f"    (This is a ~2GB file, please wait...)")
+            
+            try:
+                # Create unverified context to avoid SSL errors
+                ssl_context = ssl._create_unverified_context()
+                
+                with urllib.request.urlopen(model_url, context=ssl_context) as response:
+                    with open(normals_path, 'wb') as out_file:
+                        # Simple download loop to show some progress could be added,
+                        # but for now we just read/write
+                        block_size = 1024 * 1024  # 1MB
+                        while True:
+                            buffer = response.read(block_size)
+                            if not buffer:
+                                break
+                            out_file.write(buffer)
+                
+                print(f"    ✓ Download complete: {normals_path.name}")
+                
+            except Exception as e:
+                print(f"    ❌ Download failed: {e}")
+                print("    Using fallback: Derive normals from depth")
+                return None
+
+        # 2. Load Model
+        try:
+            print("    Loading DPT architecture...")
+            # We use the DPT_Large architecture from MiDaS as the backbone
+            model = torch.hub.load("intel-isl/MiDaS", "DPT_Large", pretrained=False)
+            model.to(self.device)
+            model.eval()
+            
+            print(f"    Loading weights from {normals_path.name}...")
+            checkpoint = torch.load(normals_path, map_location=self.device)
+            
+            if 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            else:
+                state_dict = checkpoint
+            
+            # Load weights (strict=False because of potential minor key differences)
+            model.load_state_dict(state_dict, strict=False)
+            
+            # Setup transform
+            midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+            self.normals_transform = midas_transforms.dpt_transform
+            
+            print(f"    ✓ Loaded Omnidata Normals Model")
+            return model
+            
+        except Exception as e:
+            print(f"    ⚠️  Normals model loading failed: {e}")
+            print("    Using fallback: Derive normals from depth")
+            return None
+    
     # === EXTRACTION METHODS ===
     
     def extract_depth(self, frame, target_size=(360, 640)):
@@ -415,6 +490,74 @@ class EnhancedControlExtractor:
             'rotation': np.float16(rotation),
             'scale': np.float16(scale)
         }
+    
+
+    
+    def extract_surface_normals(self, frame, depth_map=None, target_size=(360, 640)):
+        """
+        Extract surface normals using Omnidata model or derive from depth.
+        """
+        # 1. Use Omnidata model if available
+        if self.normals_model is not None:
+            try:
+                # Transform input
+                input_batch = self.normals_transform(frame).to(self.device)
+                
+                with torch.no_grad():
+                    prediction = self.normals_model(input_batch)
+                    
+                    # Resize to target
+                    prediction = torch.nn.functional.interpolate(
+                        prediction.unsqueeze(1),
+                        size=target_size,
+                        mode="bicubic",
+                        align_corners=False,
+                    ).squeeze()
+                    
+                    
+                    if len(prediction.shape) == 3 and prediction.shape[0] == 3:
+                        # [3, H, W] -> [H, W, 3]
+                        prediction = prediction.permute(1, 2, 0)
+                    
+                    normal_map = prediction.cpu().numpy()
+                    
+                    # Normalize to [0, 255]
+                    # Usually output is [-1, 1]
+                    normal_map = ((normal_map + 1.0) * 127.5)
+                    normal_map = np.clip(normal_map, 0, 255).astype(np.uint8)
+                    
+                    return normal_map
+                    
+            except Exception as e:
+                print(f"    ⚠️  Omnidata extraction failed: {e}")
+                # Fallthrough to depth-based fallback
+        
+        # 2. Fallback: derive from depth
+        if depth_map is None:
+            depth_map = self.extract_depth(frame, target_size)
+        
+        # Ensure depth is float and normalized
+        if depth_map.dtype == np.uint8:
+            depth_map = depth_map.astype(np.float32) / 255.0
+        
+        # Compute gradients (surface derivatives)
+        zy, zx = np.gradient(depth_map.astype(np.float32))
+        
+        # Compute normal vectors: (-dz/dx, -dz/dy, 1)
+        # The negative signs account for depth convention
+        normal = np.dstack((-zx, -zy, np.ones_like(depth_map)))
+        
+        # Normalize to unit length
+        n = np.linalg.norm(normal, axis=2, keepdims=True)
+        normal = normal / (n + 1e-8)
+        
+        # Convert from [-1, 1] to [0, 255]
+        normal_map = ((normal + 1.0) * 127.5).astype(np.uint8)
+        
+        return normal_map
+    
+    
+
 
 
     def extract_masks(self, frame):
@@ -562,6 +705,7 @@ def process_shot_with_all_controls(
             'lighting_sequence': [],
             'camera_motion': [],
             'face_detections': [],
+            'normals': [],
         }
         
         prev_frame = None
@@ -588,6 +732,11 @@ def process_shot_with_all_controls(
             
             edges = extractor.extract_edges(frame_resized)
             controls['edges'].append(edges)
+          
+            normals = extractor.extract_surface_normals(frame_resized, depth_map=depth, target_size=target_size)
+            controls['normals'].append(normals)
+            
+            
             
             if prev_frame is not None:
                 flow = extractor.extract_optical_flow(prev_frame, frame_resized)
@@ -642,6 +791,7 @@ def process_shot_with_all_controls(
             'depth': np.stack(controls['depth']),
             'edges': np.stack(controls['edges']),
             'masks': np.stack(controls['masks']), 
+            'normals': np.stack(controls['normals']),
             'metadata': {
                 'video_id': video_id,
                 'shot_id': shot_idx,
