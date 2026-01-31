@@ -45,7 +45,7 @@ class EnhancedControlExtractor:
         self.face_detector = self.load_face_detector()
         
         
-        self.segmentation_model, self.seg_processor = self.load_semantic_segmentation_model()
+        self.semantic_segmentation_model, self.seg_processor = self.load_semantic_segmentation_model()
         
      
         
@@ -522,7 +522,7 @@ class EnhancedControlExtractor:
             seg_map: Segmentation map [H, W] with class indices [0-149]
                     Returns zeros if model not available
         """
-        if self.segmentation_model is None or self.seg_processor is None:
+        if self.semantic_segmentation_model is None or self.seg_processor is None:
             # Return empty segmentation if model not loaded
             return np.zeros(target_size, dtype=np.uint8)
         
@@ -537,7 +537,7 @@ class EnhancedControlExtractor:
             
             # Inference
             with torch.no_grad():
-                outputs = self.segmentation_model(**inputs)
+                outputs = self.semantic_segmentation_model(**inputs)
                 logits = outputs.logits
             
             # Resize to target size and get class predictions
