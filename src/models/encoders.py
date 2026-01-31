@@ -420,7 +420,14 @@ class MaskEncoder(nn.Module):
             mask = mask.unsqueeze(1)  # [B, 1, T, H, W]
         
         # Auto-detect input type: semantic segmentation (int) vs binary mask (float)
-        is_semantic = mask.dtype in [torch.long, torch.int, torch.int32, torch.int64]
+        is_semantic = mask.dtype in [
+            torch.long,
+            torch.int,
+            torch.int32,
+            torch.int64,
+            torch.uint8,
+            torch.bool,
+        ]
         
         if is_semantic and self.class_embeddings is not None:
             # Process semantic segmentation
