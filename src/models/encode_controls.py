@@ -429,10 +429,10 @@ def main():
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--control_dir', type=str, 
-                       default='data/control_signals',
+                       default='/mnt/d1/controllable-generation/control_signals',
                        help='Base directory containing control NPZ files')
     parser.add_argument('--output_dir', type=str,
-                       default='data/encoded_controls',
+                       default='/mnt/d1/controllable-generation/encoded_controls',
                        help='Output directory for encoded features')
     parser.add_argument('--num_frames', type=int, default=8,
                        help='Number of frames to sample')

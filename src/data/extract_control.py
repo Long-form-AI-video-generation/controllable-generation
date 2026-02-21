@@ -19,10 +19,11 @@ class EnhancedControlExtractor:
     """
     Extract ALL control signals using existing VideoComposer models
     """
-    def __init__(self, device='cuda', models_dir='../../models'):
+    def __init__(self, device='cuda', models_dir='../../models',  inference_controls=False):
         self.device = device
         self.models_dir = Path(models_dir)
         
+        self.inference_controls=inference_controls
         print("Loading models from VideoComposer weights...")
         
        
@@ -668,7 +669,11 @@ def process_shot_with_all_controls(
                 save_data['camera_motion'] = controls['camera_motion']
             if controls['face_detections']:
                 save_data['face_detections'] = controls['face_detections']
-        
+
+        # if self.inference_controls:
+        #      inference_output= '/inference_output'
+        #      np.savez_compressed(inference_output, **save_data)
+        # else:        
         np.savez_compressed(output_file, **save_data)
         
         return True
@@ -756,7 +761,7 @@ def main():
     SHOTS_METADATA = "../../data/shots_metadata.json"
     VIDEOS_DIR = "../../data/videos"
     OUTPUT_DIR = "../../data/control_signals"
-    MODELS_DIR = "../../models"  # YOUR models
+    MODELS_DIR = "../../models"
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     print(f"Using models from: {MODELS_DIR}\n")

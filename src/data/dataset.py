@@ -10,16 +10,6 @@ from typing import Dict
 
 
 
-
-import torch
-from torch.utils.data import Dataset
-import numpy as np
-from pathlib import Path
-import json
-import cv2
-from typing import Dict
-
-
 class ControllableVideoDataset(Dataset):
    
     def __init__(
@@ -30,6 +20,7 @@ class ControllableVideoDataset(Dataset):
         num_frames: int = 8,
         resolution: tuple = (128, 128),
         split: str = 'train',
+        text_encoder=None,
         load_videos: bool = True
     ):
         """
@@ -50,7 +41,7 @@ class ControllableVideoDataset(Dataset):
         self.load_videos = load_videos
         
         print(f"\n{'='*70}")
-        print(f"Loading Single-Video Dataset - {split.upper()} split")
+        print(f"Loading mutlt-Video Dataset - {split.upper()} split")
         print(f"{'='*70}")
         
         
@@ -144,6 +135,24 @@ class ControllableVideoDataset(Dataset):
                 rel = enc_files[0].relative_to(self.encoded_dir)
                 print(f"  Example video_id: {rel.parent.name}")
                 print(f"  Example shot_id: {rel.stem.replace('_encoded', '')}")
+
+        self.text_cache = {}
+        if text_encoder is not None:
+            print("  Pre-encoding text embeddings...")
+            unique_captions = list({s['caption'] for s in self.samples})
+            print(f"  Unique captions: {len(unique_captions)} / {len(self.samples)} total")
+            
+            batch_size = 8
+            for i in range(0, len(unique_captions), batch_size):
+                batch = unique_captions[i:i+batch_size]
+                embeddings = text_encoder.encode_text(batch)
+                for caption, emb in zip(batch, embeddings):
+                    self.text_cache[caption] = emb.cpu()
+            print("  Text encoding complete.")
+        else:
+           
+            for s in self.samples:
+                self.text_cache[s['caption']] = s['caption']
     
     def __len__(self):
         return len(self.samples)
@@ -243,7 +252,8 @@ class ControllableVideoDataset(Dataset):
             return {
                 'controls': controls,
                 'video': video,  
-                'caption': sample['caption'],
+                # 'caption': sample['caption'],
+                'caption': self.text_cache[sample['caption']], 
                 'video_id': sample['video_id'],
                 'shot_id': sample['shot_id']
             }
