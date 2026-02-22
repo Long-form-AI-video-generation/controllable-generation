@@ -268,9 +268,11 @@ class ControlEncoderProcessor:
                
                 if 'depth' in data:
                     try:
-                        tensor = self._prepare_depth(data['depth'])
-                        enc = self.encoders['depth'](tensor)
-                        encoded['depth_encoded'] = enc.cpu().numpy().astype(np.float16)
+                        tensor = self._prepare_depth(data['depth'])  # (1, 1, T, H, W)
+                        # Skip DepthEncoder — use raw depth values directly
+                        depth_raw = F.adaptive_avg_pool3d(tensor, (self.num_frames, 128, 128))
+                        depth_raw = depth_raw.expand(-1, 256, -1, -1, -1)  # (1, 256, T, 128, 128)
+                        encoded['depth_encoded'] = depth_raw.cpu().numpy().astype(np.float16)
                     except Exception as e:
                         result['errors'].append(f"depth: {str(e)[:50]}")
                 

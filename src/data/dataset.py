@@ -137,6 +137,7 @@ class ControllableVideoDataset(Dataset):
                 print(f"  Example shot_id: {rel.stem.replace('_encoded', '')}")
 
         self.text_cache = {}
+        text_encoder=None
         if text_encoder is not None:
             print("  Pre-encoding text embeddings...")
             unique_captions = list({s['caption'] for s in self.samples})
@@ -232,13 +233,13 @@ class ControllableVideoDataset(Dataset):
             controls = {}
             for key in encoded.keys():
                 data = encoded[key]
-                tensor = torch.from_numpy(data).float()
+                tensor = torch.from_numpy(data).half()
                 
                 if tensor.dim() == 5 and tensor.shape[0] == 1:
                     tensor = tensor.squeeze(0)
                 
                 controls[key] = tensor
-            
+            controls = {k: v for k, v in controls.items() if k == 'depth_encoded'}
             # Load video frames
             frames = self._load_video_frames(
                 sample['video_id'],
@@ -263,11 +264,11 @@ class ControllableVideoDataset(Dataset):
             return {
                 'controls': {
                     'depth_encoded': torch.zeros(256, 8, 128, 128),
-                    'sketch_encoded': torch.zeros(256, 8, 128, 128),
-                    'motion_encoded': torch.zeros(256, 8, 128, 128),
-                    'style_encoded': torch.zeros(256, 8, 32, 32),
-                    'pose_encoded': torch.zeros(256, 8, 128, 128),
-                    'mask_encoded': torch.zeros(256, 8, 128, 128),
+                    # 'sketch_encoded': torch.zeros(256, 8, 128, 128),
+                    # 'motion_encoded': torch.zeros(256, 8, 128, 128),
+                    # 'style_encoded': torch.zeros(256, 8, 32, 32),
+                    # 'pose_encoded': torch.zeros(256, 8, 128, 128),
+                    # 'mask_encoded': torch.zeros(256, 8, 128, 128),
                 },
                 'video': torch.zeros(3, self.num_frames, *self.resolution),
                 'caption': "error loading sample",

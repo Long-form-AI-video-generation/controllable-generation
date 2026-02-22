@@ -9,7 +9,7 @@ class ControlAdapter(nn.Module):
     def __init__(
         self,
         control_dim: int = 256,
-        hidden_dim: int = 1024,
+        hidden_dim: int = 512,
         dit_dim: int = 2048,
         num_controls: int = 6,
         use_gradient_checkpointing: bool = False,
@@ -38,7 +38,11 @@ class ControlAdapter(nn.Module):
             nn.Dropout(0.1),
         )
 
-       
+        # self.temporal_smooth = nn.Conv1d(
+        #     hidden_dim, hidden_dim,
+        #     kernel_size=3, padding=1, groups=hidden_dim
+        # )
+
         # self.modality_gates = nn.Parameter(torch.ones(num_controls))
 
         self.modality_gates = nn.Parameter(torch.randn(num_controls) * 0.1)
@@ -101,7 +105,11 @@ class ControlAdapter(nn.Module):
 
           
             gate = torch.sigmoid(self.modality_gates[idx])
+            # proj = proj.permute(0, 2, 1)               # (B, hidden, T*16*16)
+            # proj = self.temporal_smooth(proj.float())  # smooth across sequence
+            # proj = proj.permute(0, 2, 1)              # (B, T*16*16, hidden)
             projected.append(proj * gate)
+            # projected.append(proj * gate)
 
         
         combined = torch.cat(projected, dim=-1) 
@@ -118,7 +126,8 @@ class ControlAdapter(nn.Module):
     def get_modality_weights(self) -> dict:
         """Inspect learned modality importance (for logging/debugging)."""
         gates = torch.sigmoid(self.modality_gates).detach().cpu()
-        modalities = ['depth', 'mask', 'motion', 'pose', 'sketch', 'style']
+        modalities = ['depth']
+        # modalities = ['depth', 'mask', 'motion', 'pose', 'sketch', 'style']
         return {mod: float(gates[i]) for i, mod in enumerate(modalities)}
 
 
