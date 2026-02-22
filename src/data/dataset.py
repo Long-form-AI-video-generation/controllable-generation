@@ -239,7 +239,7 @@ class ControllableVideoDataset(Dataset):
                     tensor = tensor.squeeze(0)
                 
                 controls[key] = tensor
-            controls = {k: v for k, v in controls.items() if k == 'depth_encoded'}
+            controls = {k: v for k, v in controls.items() if k == 'sketch_encoded'}
             # Load video frames
             frames = self._load_video_frames(
                 sample['video_id'],
@@ -263,7 +263,7 @@ class ControllableVideoDataset(Dataset):
             print(f"⚠️  Error loading sample {idx}: {e}")
             return {
                 'controls': {
-                    'depth_encoded': torch.zeros(256, 8, 128, 128),
+                    'sketch_encoded': torch.zeros(256, 8, 128, 128),
                     # 'sketch_encoded': torch.zeros(256, 8, 128, 128),
                     # 'motion_encoded': torch.zeros(256, 8, 128, 128),
                     # 'style_encoded': torch.zeros(256, 8, 32, 32),

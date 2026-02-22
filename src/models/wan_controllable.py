@@ -7,7 +7,7 @@ import time
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
 WAN_PATH = project_root / 'Wan2.2'
-
+import torch.nn.functional as F
 if not WAN_PATH.exists():
     raise RuntimeError(f"WAN directory not found at {WAN_PATH}")
 
@@ -117,6 +117,39 @@ class ControllableWAN(nn.Module):
             hook = block.register_forward_pre_hook(self._control_injection_hook)
             self.hooks.append(hook)
 
+    # def _control_injection_hook(self, module, input):
+    #     if self._control_signal is None:
+    #         return input
+
+    #     x = input[0]
+    #     B, L, C = x.shape
+    #     hook_idx = self._block_to_hook_idx[id(module)]
+    #     zero_conv = self.zero_convs[hook_idx]
+    #     ctrl = self._control_signal 
+
+    #     if ctrl.shape[1] != L:
+          
+    #         B_c, S_c, C_c = ctrl.shape
+            
+    #         T_c = S_c // (16 * 16)
+    #         ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2) 
+         
+    #         hw = L // T_c if T_c > 0 else L
+    #         h = w = int(hw ** 0.5)
+            
+    #         ctrl = nn.functional.interpolate(ctrl, size=(h, w), mode='bilinear', align_corners=False)
+    #         ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
+            
+           
+    #         if ctrl.shape[1] != L:
+    #             ctrl = ctrl.permute(0, 2, 1)
+    #             ctrl = nn.functional.interpolate(ctrl, size=L, mode='linear', align_corners=False)
+    #             ctrl = ctrl.permute(0, 2, 1)
+
+    #     ctrl = zero_conv(ctrl)
+    #     x = x + ctrl
+    #     return (x,) + input[1:]
+
     def _control_injection_hook(self, module, input):
         if self._control_signal is None:
             return input
@@ -125,32 +158,24 @@ class ControllableWAN(nn.Module):
         B, L, C = x.shape
         hook_idx = self._block_to_hook_idx[id(module)]
         zero_conv = self.zero_convs[hook_idx]
-        ctrl = self._control_signal 
+        ctrl = self._control_signal  # (B, T*16*16, dit_dim)
 
+        # Interpolate sequence dim to match current L
         if ctrl.shape[1] != L:
-          
-            B_c, S_c, C_c = ctrl.shape
-            
-            T_c = S_c // (16 * 16)
-            ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2) 
-         
-            hw = L // T_c if T_c > 0 else L
-            h = w = int(hw ** 0.5)
-            
-            ctrl = nn.functional.interpolate(ctrl, size=(h, w), mode='bilinear', align_corners=False)
-            ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
-            
-           
-            if ctrl.shape[1] != L:
-                ctrl = ctrl.permute(0, 2, 1)
-                ctrl = nn.functional.interpolate(ctrl, size=L, mode='linear', align_corners=False)
-                ctrl = ctrl.permute(0, 2, 1)
+            ctrl = ctrl.permute(0, 2, 1)                          # (B, C, S)
+            ctrl = F.interpolate(ctrl.float(), size=L, mode='linear', align_corners=False)
+            ctrl = ctrl.permute(0, 2, 1)                          # (B, L, C)
 
         ctrl = zero_conv(ctrl)
+
+        # Safety clamp — prevent control from overwhelming DiT activations
+        x_norm   = x.norm(dim=-1, keepdim=True).mean()
+        ctrl_norm = ctrl.norm(dim=-1, keepdim=True).mean()
+        if ctrl_norm > 0:
+            ctrl = ctrl * (x_norm / ctrl_norm).clamp(max=1.0) * 0.1
+
         x = x + ctrl
         return (x,) + input[1:]
-
-    
 
     def _load_vae(self):
         from wan.modules.vae2_2 import Wan2_2_VAE
@@ -311,6 +336,9 @@ class ControllableWAN(nn.Module):
             t0 = time.time()
            
             self._control_signal = self.control_adapter(controls_device)
+            
+            print(f"  ctrl_signal norm: {self._control_signal.norm():.4f}  "
+                f"  gate: {torch.sigmoid(self.control_adapter.modality_gates).item():.4f}")
             del controls_device
             torch.cuda.empty_cache()
 
@@ -337,8 +365,8 @@ class ControllableWAN(nn.Module):
             text_embeddings = [prompts[i].to(self.device, dtype=torch.float32) 
                             for i in range(prompts.shape[0])]
         elif isinstance(prompts, (list, tuple)) and isinstance(prompts[0], torch.Tensor):
-         
-            text_embeddings = [p.to(self.dit_device, dtype=torch.float32) for p in prompts]
+            
+            text_embeddings = [p.to(self.device, dtype=torch.float32) for p in prompts]
         else:
             
             text_embeddings = self.encode_text(prompts)

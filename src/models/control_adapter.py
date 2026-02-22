@@ -106,7 +106,7 @@ class ControlAdapter(nn.Module):
           
             gate = torch.sigmoid(self.modality_gates[idx])
             proj = proj.permute(0, 2, 1)               # (B, hidden, T*16*16)
-            proj = self.temporal_smooth(proj.float())  # smooth across sequence
+            proj = self.temporal_smooth(proj.float()) # smooth across sequence
             proj = proj.permute(0, 2, 1)              # (B, T*16*16, hidden)
             projected.append(proj * gate)
             # projected.append(proj * gate)
@@ -124,11 +124,9 @@ class ControlAdapter(nn.Module):
         return control_signal
 
     def get_modality_weights(self) -> dict:
-        """Inspect learned modality importance (for logging/debugging)."""
-        gates = torch.sigmoid(self.modality_gates).detach().cpu()
-        modalities = ['depth']
-        # modalities = ['depth', 'mask', 'motion', 'pose', 'sketch', 'style']
-        return {mod: float(gates[i]) for i, mod in enumerate(modalities)}
+        gates_for_logging = torch.sigmoid(self.modality_gates).detach().cpu() 
+        modalities = ['sketch']
+        return {mod: float(gates_for_logging[i]) for i, mod in enumerate(modalities)}
 
 
 if __name__ == '__main__':

@@ -101,7 +101,7 @@ class MultiVideoTrainer:
             if g['name'] == 'zero_convs':
                 g['lr'] = config['lr'] * 2.0
             elif g['name'] == 'modality_gates': 
-                g['lr'] = config['lr'] * 20.0
+                g['lr'] = config['lr'] * 2.0
             else:
                 g['lr'] = config['lr']
 
@@ -134,7 +134,7 @@ class MultiVideoTrainer:
 
         if resume_from:
             self.load_checkpoint(resume_from)
-
+       
         trainable_params = self.base_model.get_trainable_parameters()
         zc_params = sum(p.numel() for p in self.base_model.zero_convs.parameters())
 
@@ -262,7 +262,7 @@ class MultiVideoTrainer:
     def train_step(self, batch) -> tuple[torch.Tensor, dict]:
         video    = batch['video'].to(self.device)
         controls = {k: v.to(self.device) for k, v in batch['controls'].items()}
-        active_controls = ['depth_encoded']
+        active_controls = ['sketch_encoded']
         controls = {k: v for k, v in controls.items() if k in active_controls}
         # text_embeddings = batch['caption'].to(self.device)
         caption = batch['caption']
@@ -314,8 +314,8 @@ class MultiVideoTrainer:
         pred_frames = noise_pred.reshape(B, -1, noise_pred.shape[-1] if noise_pred.dim()==3 else noise_pred.shape[1])
         frame_diff = (pred_frames[:, 1:] - pred_frames[:, :-1]).pow(2).mean()
         total_loss = total_loss + 0.05 * frame_diff                        
-        # total_loss = total_loss + 0.01 * gate_entropy
-
+        total_loss = total_loss + 0.01 * gate_entropy
+     
         del noisy, noise_pred, controls
         torch.cuda.empty_cache()
 
@@ -508,7 +508,7 @@ def main():
         'grad_accum_steps': 8,
         'mixed_precision':  True,
 
-        'num_frames':       2,
+        'num_frames':       8,
         'resolution':       (128, 128),
         'control_resolution': (16, 16),
 
