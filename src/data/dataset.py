@@ -137,7 +137,7 @@ class ControllableVideoDataset(Dataset):
                 print(f"  Example shot_id: {rel.stem.replace('_encoded', '')}")
 
         self.text_cache = {}
-        text_encoder=None
+       
         if text_encoder is not None:
             print("  Pre-encoding text embeddings...")
             unique_captions = list({s['caption'] for s in self.samples})

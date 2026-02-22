@@ -283,9 +283,12 @@ class MultiVideoTrainer:
         timesteps = torch.randint(50, 950, (B,), device=self.device).long()
         noise     = torch.randn_like(latent, dtype=torch.float32)
         t         = (timesteps.float() / 1000.0).view(-1, 1, 1, 1, 1)
-        noisy     = (1 - t) * latent + t * noise
-        target    = noise - latent
+        noisy     = ((1 - t) * latent + t * noise)
+        target    = (noise - latent)
+        del t, noise
         del latent
+        torch.cuda.empty_cache()
+       
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16,
                             enabled=self.config['mixed_precision']):
@@ -313,7 +316,7 @@ class MultiVideoTrainer:
         total_loss = total_loss + 0.05 * frame_diff                        
         # total_loss = total_loss + 0.01 * gate_entropy
 
-        del noisy, noise, noise_pred, controls
+        del noisy, noise_pred, controls
         torch.cuda.empty_cache()
 
         metrics = {
@@ -502,7 +505,7 @@ def main():
 
         'num_epochs':       40,
         'num_steps':        50000,
-        'grad_accum_steps': 4,
+        'grad_accum_steps': 8,
         'mixed_precision':  True,
 
         'num_frames':       2,

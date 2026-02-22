@@ -38,10 +38,10 @@ class ControlAdapter(nn.Module):
             nn.Dropout(0.1),
         )
 
-        # self.temporal_smooth = nn.Conv1d(
-        #     hidden_dim, hidden_dim,
-        #     kernel_size=3, padding=1, groups=hidden_dim
-        # )
+        self.temporal_smooth = nn.Conv1d(
+            hidden_dim, hidden_dim,
+            kernel_size=3, padding=1, groups=hidden_dim
+        )
 
         # self.modality_gates = nn.Parameter(torch.ones(num_controls))
 
@@ -105,9 +105,9 @@ class ControlAdapter(nn.Module):
 
           
             gate = torch.sigmoid(self.modality_gates[idx])
-            # proj = proj.permute(0, 2, 1)               # (B, hidden, T*16*16)
-            # proj = self.temporal_smooth(proj.float())  # smooth across sequence
-            # proj = proj.permute(0, 2, 1)              # (B, T*16*16, hidden)
+            proj = proj.permute(0, 2, 1)               # (B, hidden, T*16*16)
+            proj = self.temporal_smooth(proj.float())  # smooth across sequence
+            proj = proj.permute(0, 2, 1)              # (B, T*16*16, hidden)
             projected.append(proj * gate)
             # projected.append(proj * gate)
 

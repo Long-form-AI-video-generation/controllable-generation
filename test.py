@@ -170,18 +170,17 @@ def test_trained_model(
     img = Image.open(ref_image_path).convert('RGB')
 
     generate_kwargs = dict(
-        caption=caption,
-        img=img,
-        size=SIZE_CONFIGS[size],
-        max_area=MAX_AREA_CONFIGS[size],
-        frame_num=50,
-        shift=cfg.sample_shift,
-        sample_solver='unipc',
-        sampling_steps=50,
-        guide_scale=cfg.sample_guide_scale,
-        seed=42,
-        offload_model=True,
-    )
+    img=img,
+    size=SIZE_CONFIGS[size],
+    max_area=MAX_AREA_CONFIGS[size],
+    frame_num=50,
+    shift=cfg.sample_shift,
+    sample_solver='unipc',
+    sampling_steps=50,
+    guide_scale=cfg.sample_guide_scale,
+    seed=42,
+    offload_model=True,
+)
 
     def make_hook(ctrl_signal, zero_conv, scale=0.1):
         def hook(module, input):
@@ -203,7 +202,7 @@ def test_trained_model(
 
   
     print("[4/5] Generating without controls (baseline)...")
-    video_no_ctrl = wan_ti2v.generate(**generate_kwargs)
+    video_no_ctrl =wan_ti2v.generate(caption, **generate_kwargs)
     save_video(
         tensor=video_no_ctrl[None],
         save_file='no_control.mp4',
@@ -224,7 +223,7 @@ def test_trained_model(
     print(f" Registered {len(hooks)} hooks")
 
     try:
-        video_with_ctrl = wan_ti2v.generate(**generate_kwargs)
+        video_with_ctrl = wan_ti2v.generate(caption, **generate_kwargs)
     finally:
         for h in hooks:
             h.remove()

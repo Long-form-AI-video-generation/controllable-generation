@@ -41,7 +41,7 @@ class ControllableWAN(nn.Module):
         self,
         checkpoint_dir: str,
         device: str = 'cuda',
-        control_injection_layers: list = [0, 4, 8, 12, 16, 20, 24, 28],
+        control_injection_layers: list = [0,4,8,12,16,20,24,28],
         spatial_downsample: int = 16,
     ):
         super().__init__()
@@ -215,10 +215,13 @@ class ControllableWAN(nn.Module):
             state_dict.update(load_file(str(shard_path)))
 
         wan.load_state_dict(state_dict)
+        wan = wan.to(torch.bfloat16)
         wan = wan.eval()
 
         for param in wan.parameters():
             param.requires_grad = False
+
+        
 
         print(f"   WAN loaded ({model_config.get('num_layers', 32)} layers)")
         return wan
@@ -354,20 +357,21 @@ class ControllableWAN(nn.Module):
         seq_len = ((seq_len_actual + 63) // 64) * 64
         print(seq_len, 'seq len')
         t0 = time.time()
+       
         noise_pred = self.wan(
-            x=x,
-            t=timesteps,
-            context=context,
-            seq_len=seq_len,
-            y=None,
-        )
+                x=x,
+                t=timesteps,
+                context=context,
+                seq_len=seq_len,
+                y=None,
+            )
         print(f"  WAN forward:     {time.time() - t0:.1f}s")
 
         noise_pred = torch.stack(list(noise_pred))
         self._control_signal = None   
 
 
-        self.wan.cpu()
+        
         torch.cuda.empty_cache()
 
         return noise_pred
