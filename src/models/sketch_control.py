@@ -1,188 +1,253 @@
-import torch
-import torch.nn.functional as F
+import json
+import cv2
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from pathlib import Path
 from tqdm import tqdm
-import cv2
-import sys
-import time
+import warnings
+from collections import defaultdict
+import gc
+from PIL import Image
 
-class SketchOnlyProcessorOnlyProcessor:
-    """Process control NPZ files — sketch only, no encoder (raw MiDaS values)"""
+warnings.filterwarnings('ignore')
 
-    def __init__(
-        self,
-        control_base_dir: str,
-        output_dir: str,
-        num_frames: int = 8,
-        resolution: tuple = (256, 256),
-    ):
-        self.control_base = Path(control_base_dir)
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.num_frames = num_frames
-        self.resolution = resolution  # (W, H)
 
-        self.npz_files = self._find_all_npz_files()
-        print(f"Found {len(self.npz_files)} NPZ files to process\n")
+def extract_sketch_anime_lineart(frame_bgr):
+    
+    from controlnet_aux import LineartAnimeDetector
+    detector = LineartAnimeDetector.from_pretrained("lllyasviel/Annotators")
+    pil = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+    result = detector(pil)
+    return np.array(result.convert('L'))  
 
-    def _find_all_npz_files(self) -> list:
-        files = []
-        for npz_path in self.control_base.rglob('*.npz'):
-            # Skip already-encoded files if they ended up in source dir
-            if '_encoded' in npz_path.stem:
-                continue
-            rel_path = npz_path.relative_to(self.control_base)
-            output_path = self.output_dir / rel_path.parent / f"{rel_path.stem}_encoded.npz"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            files.append({
-                'input_path': npz_path,
-                'output_path': output_path,
-            })
-        return files
 
-    def _sample_frames(self, data: np.ndarray, target_frames: int) -> np.ndarray:
-        current_frames = data.shape[0]
-        if current_frames <= target_frames:
-            if current_frames < target_frames:
-                pad_width = [(0, target_frames - current_frames)] + [(0, 0)] * (data.ndim - 1)
-                data = np.pad(data, pad_width, mode='edge')
-            return data
-        indices = np.linspace(0, current_frames - 1, target_frames, dtype=int)
-        return data[indices]
+def extract_sketch_xdog(frame_bgr, sigma=0.5, k=4.5, p=19, epsilon=-0.1, phi=10e9):
+   
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
-    def _prepare_sketch_raw(self, sketch: np.ndarray) -> np.ndarray:
-        """
-        Raw MiDaS sketch: (T, H, W) uint8 0-255
-        → (1, 256, T, 128, 128) float16
+    g1 = cv2.GaussianBlur(gray, (0, 0), sigma)
+    g2 = cv2.GaussianBlur(gray, (0, 0), sigma * k)
 
-        No encoder — just resize, normalize, expand channels.
-        Real near/far values preserved.
-        """
-        sketch = self._sample_frames(sketch, self.num_frames)  # (T, H, W)
+    dog = g1 - p * g2
 
-        # Resize each frame
-        W, H = self.resolution
-        resized = []
-        for t in range(sketch.shape[0]):
-            frame = cv2.resize(sketch[t], (128, 128), interpolation=cv2.INTER_LINEAR)
-            resized.append(frame)
-        sketch = np.stack(resized)  # (T, 128, 128)
+    
+    sketch = np.where(
+        dog >= epsilon,
+        1.0,
+        1.0 + np.tanh(phi * dog)
+    )
 
-        # Normalize to [0, 1]
-        sketch = sketch.astype(np.float32) / 255.0  # (T, 128, 128)
+    sketch = np.clip(sketch, 0, 1)
+    sketch = (sketch * 255).astype(np.uint8)
 
-        # (T, 128, 128) → (1, 1, T, 128, 128) tensor
-        tensor = torch.from_numpy(sketch).unsqueeze(0).unsqueeze(0)  # (1, 1, T, 128, 128)
+    return cv2.bitwise_not(sketch)
 
-        # Expand 1 channel → 256 channels (repeat same values)
-        # Adapter expects (B, 256, T, H, W)
-        tensor = tensor.expand(-1, 256, -1, -1, -1)  # (1, 256, T, 128, 128)
 
-        return tensor.numpy().astype(np.float16)
+def extract_sketch_canny_anime(frame_bgr):
+   
+    smooth = cv2.bilateralFilter(frame_bgr, d=9, sigmaColor=75, sigmaSpace=75)
+    gray = cv2.cvtColor(smooth, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    return edges  
 
-    def process_single_file(self, file_info: dict) -> dict:
-        result = {'success': False, 'size_mb': 0, 'errors': []}
 
+class SketchExtractor:
+    
+    def __init__(self, method='auto', device='cuda'):
+        self.device = device
+        self.method = method
+        self.detector = None
+
+        print(f"  Initializing sketch extractor (method={method})…")
+
+        if method in ('auto', 'lineart_anime'):
+            self.detector = self._try_load_lineart_anime()
+
+        if self.detector is None:
+            if method == 'lineart_anime':
+                print("    controlnet-aux not available, falling back to XDoG")
+            self.method = 'xdog'
+            print(f"    Using XDoG sketch extraction (no dependencies needed)")
+
+    def _try_load_lineart_anime(self):
         try:
-            # Skip if already processed
-            if file_info['output_path'].exists():
-                result['success'] = True
-                result['size_mb'] = file_info['output_path'].stat().st_size / 1e6
-                return result
-
-            data = np.load(file_info['input_path'], allow_pickle=True)
-
-            if 'sketch' not in data:
-                result['errors'].append("no sketch key in npz")
-                return result
-
-            sketch_encoded = self._prepare_sketch_raw(data['sketch'])
-
-            np.savez_compressed(
-                file_info['output_path'],
-                sketch_encoded=sketch_encoded,
-            )
-
-            result['success'] = True
-            result['size_mb'] = file_info['output_path'].stat().st_size / 1e6
-
+            from controlnet_aux import LineartAnimeDetector
+            detector = LineartAnimeDetector.from_pretrained("lllyasviel/Annotators")
+            print("   Using ControlNet anime lineart detector")
+            self.method = 'lineart_anime'
+            return detector
         except Exception as e:
-            result['errors'].append(f"general: {str(e)[:100]}")
+            print(f"   controlnet-aux not available ({e})")
+            return None
 
-        return result
+    def extract(self, frame_bgr, target_size=(360, 640)):
+        
+        h, w = target_size
 
-    def process_all(self):
-        print("=" * 70)
-        print(f"sketch-Only Encoding (raw MiDaS, no encoder)")
-        print(f"Files:  {len(self.npz_files)}")
-        print(f"Frames: {self.num_frames}  |  Spatial: 128×128  |  Channels: 256")
-        print("=" * 70 + "\n")
+        if self.method == 'lineart_anime' and self.detector is not None:
+            pil = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+            result = self.detector(pil, detect_resolution=512, image_resolution=max(h, w))
+            sketch = np.array(result.convert('L'))
+        elif self.method == 'xdog':
+            sketch = extract_sketch_xdog(frame_bgr)
+        else:
+            sketch = extract_sketch_canny_anime(frame_bgr)
 
-        success_count = 0
-        total_size_mb = 0
-        all_errors = []
-        start_time = time.time()
+       
+        sketch = cv2.resize(sketch, (w, h), interpolation=cv2.INTER_LINEAR)
+        return sketch 
 
-        for file_info in tqdm(self.npz_files, desc="Encoding sketch", ncols=80):
-            result = self.process_single_file(file_info)
 
-            if result['success']:
-                success_count += 1
-                total_size_mb += result['size_mb']
-            if result['errors']:
-                all_errors.extend(result['errors'])
+def process_shot_sketch_only(
+    video_path,
+    shot,
+    output_dir,
+    extractor: SketchExtractor,
+    sample_rate=4,
+    target_size=(360, 640),
+):
+    video_id    = shot['video_id']
+    shot_idx    = shot['shot_id']
+    start_frame = shot['segment_start_frame']
 
-        elapsed = time.time() - start_time
 
-        print(f"\n{'='*70}")
-        print("Done!")
-        print(f"  Success:      {success_count}/{len(self.npz_files)} files")
-        print(f"  Total size:   {total_size_mb/1024:.2f} GB")
-        print(f"  Time:         {elapsed/60:.1f} minutes")
-        print(f"  Speed:        {len(self.npz_files)/elapsed:.1f} files/sec")
 
-        if all_errors:
-            print(f"\n  Errors: {len(all_errors)}")
-            for err in all_errors[:10]:
-                print(f"    - {err}")
+    
+    end_frame   = shot['segment_end_frame']
+    num_frames  = end_frame - start_frame
 
-        self._print_sample()
+    if num_frames < sample_rate:
+        return False
 
-    def _print_sample(self):
-        processed = list(self.output_dir.rglob('*_encoded.npz'))
-        if not processed:
-            print("No output files found.")
-            return
-        print(f"\nSample output ({processed[0].name}):")
-        sample = np.load(processed[0])
-        for key in sample.keys():
-            d = sample[key]
-            print(f"  {key:20s}: shape={str(d.shape):30s}  dtype={d.dtype}  "
-                  f"min={d.min():.3f}  max={d.max():.3f}")
-        print(f"\nTotal files: {len(processed)}")
+    out_path = Path(output_dir) / video_id
+    out_path.mkdir(parents=True, exist_ok=True)
+    output_file = out_path / f"shot_{shot_idx}_controls_encoded.npz"
+
+    if output_file.exists():
+        return True
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return False
+
+    try:
+        sketches = []
+        frames_to_process = list(range(0, num_frames, sample_rate))
+        pbar = tqdm(frames_to_process, desc=f"  Shot {shot_idx}", leave=False, unit="frame")
+
+        for frame_offset in frames_to_process:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame + frame_offset)
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frame_resized = cv2.resize(frame, target_size[::-1])  
+            sketch = extractor.extract(frame_resized, target_size)
+            sketches.append(sketch)
+
+        pbar.close()
+
+        if not sketches:
+            return False
+
+        np.savez_compressed(
+            output_file,
+            sketch=np.stack(sketches),  
+            metadata={
+                'video_id':    video_id,
+                'shot_id':     shot_idx,
+                'sample_rate': sample_rate,
+                'target_size': target_size,
+                'sketch_method': extractor.method,
+            }
+        )
+        return True
+
+    except Exception as e:
+        print(f"\n  Shot {shot_idx}: {e}")
+        import traceback; traceback.print_exc()
+        return False
+    finally:
+        cap.release()
+        gc.collect()
+
+
+
+def process_dataset(
+    video_dir,
+    shot_dir,
+    output_dir,
+    sample_rate=4,
+    target_size=(360, 640),
+    sketch_method='auto',
+    device='cuda',
+):
+    print(f"\n{'='*70}")
+    print(f"Sketch Extraction  (method={sketch_method})")
+    print(f"{'='*70}\n")
+
+    with open(shot_dir) as f:
+        all_shots = json.load(f)
+
+    shots_by_video = defaultdict(list)
+    for shot in all_shots:
+        shots_by_video[shot['video_id']].append(shot)
+
+    print(f"Loaded {len(all_shots)} shots from {len(shots_by_video)} videos\n")
+
+    extractor = SketchExtractor(method=sketch_method, device=device)
+
+    total_ok = total_fail = 0
+    pbar = tqdm(shots_by_video.items(), desc="Videos", unit="video")
+
+    for video_id, shots in pbar:
+        video_path = Path(video_dir) / f"{video_id}.mp4"
+        if not video_path.exists():
+            total_fail += len(shots)
+            continue
+
+        for shot in shots:
+            ok = process_shot_sketch_only(
+                video_path, shot, output_dir,
+                extractor, sample_rate, target_size,
+            )
+            total_ok   += ok
+            total_fail += not ok
+
+        pbar.set_postfix(Processed=total_ok, Failed=total_fail)
+
+    print(f"\n{'='*70}")
+    print(f"Complete!  Processed: {total_ok}  |  Failed: {total_fail}")
+    print(f"{'='*70}\n")
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Encode sketch controls (raw MiDaS, no encoder)")
-    parser.add_argument('--control_dir', type=str,
-                        default='/mnt/d1/controllable-generation/control_signals',
-                        help='Directory containing raw control NPZ files')
-    parser.add_argument('--output_dir', type=str,
-                        default='/mnt/d1/controllable-generation/encoded_controls',
-                        help='Output directory for encoded sketch NPZ files')
-    parser.add_argument('--num_frames', type=int, default=8)
+    parser = argparse.ArgumentParser(description="Extract sketch/lineart control signals")
+    parser.add_argument('--shots',       default="/mnt/d1/controllable-generation/shots_metadata.json")
+    parser.add_argument('--videos',      default="/mnt/d1/controllable-generation/videos")
+    parser.add_argument('--output',      default="/mnt/d1/controllable-generation/encoded_controls")
+    parser.add_argument('--sample_rate', type=int, default=4)
+    parser.add_argument('--method',      default='auto',
+                        choices=['auto', 'lineart_anime', 'xdog', 'canny'],
+                        help='auto tries lineart_anime first, falls back to xdog')
     args = parser.parse_args()
 
-    processor = SketchOnlyProcessor(
-        control_base_dir=args.control_dir,
-        output_dir=args.output_dir,
-        num_frames=args.num_frames,
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Device: {DEVICE}\n")
+
+    process_dataset(
+        video_dir=args.videos,
+        shot_dir=args.shots,
+        output_dir=args.output,
+        sample_rate=args.sample_rate,
+        sketch_method=args.method,
+        device=DEVICE,
     )
-    processor.process_all()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
