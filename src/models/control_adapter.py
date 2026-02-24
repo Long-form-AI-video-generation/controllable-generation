@@ -11,7 +11,7 @@ class ControlAdapter(nn.Module):
         control_dim: int = 256,
         hidden_dim: int = 512,
         dit_dim: int = 2048,
-        num_controls: int = 6,
+        num_controls: int = 1,
         use_gradient_checkpointing: bool = False,
     ):
         super().__init__()
@@ -83,7 +83,11 @@ class ControlAdapter(nn.Module):
             )
 
         first_feat = control_features[sorted_keys[0]]
+        # B, C, T, H, W = first_feat.shape
+        if first_feat.dim() == 4:
+            first_feat = first_feat.unsqueeze(0) 
         B, C, T, H, W = first_feat.shape
+
         target_spatial = 16  
 
         projected = []
@@ -125,7 +129,8 @@ class ControlAdapter(nn.Module):
 
     def get_modality_weights(self) -> dict:
         gates_for_logging = torch.sigmoid(self.modality_gates).detach().cpu() 
-        modalities = ['sketch']
+        # modalities = ['sketch']
+        modalities = ['sketch'][:self.num_controls] 
         return {mod: float(gates_for_logging[i]) for i, mod in enumerate(modalities)}
 
 

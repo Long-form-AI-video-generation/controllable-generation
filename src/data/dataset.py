@@ -7,7 +7,7 @@ from pathlib import Path
 import json
 import cv2
 from typing import Dict
-
+import torch.nn.functional as F
 
 
 class ControllableVideoDataset(Dataset):
@@ -228,18 +228,32 @@ class ControllableVideoDataset(Dataset):
         
         try:
             # Load encoded controls
-            encoded = np.load(sample['encoded_path'])
-            
+            # encoded = np.load(sample['encoded_path'])
+            encoded = np.load(sample['encoded_path'], allow_pickle=True)
             controls = {}
             for key in encoded.keys():
+                if key == 'metadata':          
+                    continue
                 data = encoded[key]
-                tensor = torch.from_numpy(data).half()
-                
-                if tensor.dim() == 5 and tensor.shape[0] == 1:
-                    tensor = tensor.squeeze(0)
-                
+                if data.dtype == object:    
+                    continue
+
+                if key == 'sketch':
+                   
+                    t = torch.from_numpy(data.astype(np.float32)) / 255.0  
+                    T_frames, H, W = t.shape
+                    t = t.reshape(T_frames, 1, H, W)
+                    t = F.interpolate(t, size=(128, 128), mode='bilinear', align_corners=False)
+                    t = t.reshape(1, T_frames, 128, 128)
+                    tensor = t.expand(256, -1, -1, -1).clone().half() 
+
+                else:
+                    tensor = torch.from_numpy(data).half()
+                    if tensor.dim() == 5 and tensor.shape[0] == 1:
+                        tensor = tensor.squeeze(0)
+
                 controls[key] = tensor
-            controls = {k: v for k, v in controls.items() if k == 'sketch_encoded'}
+            controls = {k: v for k, v in controls.items() if k == 'sketch'}
             # Load video frames
             frames = self._load_video_frames(
                 sample['video_id'],
@@ -263,7 +277,7 @@ class ControllableVideoDataset(Dataset):
             print(f"⚠️  Error loading sample {idx}: {e}")
             return {
                 'controls': {
-                    'sketch_encoded': torch.zeros(256, 8, 128, 128),
+                    'sketch': torch.zeros(256, 8, 128, 128),
                     # 'sketch_encoded': torch.zeros(256, 8, 128, 128),
                     # 'motion_encoded': torch.zeros(256, 8, 128, 128),
                     # 'style_encoded': torch.zeros(256, 8, 32, 32),

@@ -262,7 +262,7 @@ class MultiVideoTrainer:
     def train_step(self, batch) -> tuple[torch.Tensor, dict]:
         video    = batch['video'].to(self.device)
         controls = {k: v.to(self.device) for k, v in batch['controls'].items()}
-        active_controls = ['sketch_encoded']
+        active_controls = ['sketch']
         controls = {k: v for k, v in controls.items() if k in active_controls}
         # text_embeddings = batch['caption'].to(self.device)
         caption = batch['caption']
