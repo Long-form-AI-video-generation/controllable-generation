@@ -169,7 +169,7 @@ def parse_args():
     p.add_argument('--frame_num',   type=int, default=17,
                    help='Frames to generate — must be 4n+1 (17, 33, 49, 81...)')
     p.add_argument('--steps',       type=int,   default=20)
-    p.add_argument('--guidance',    type=float, default=5.0)
+    p.add_argument('--guidance',    type=float, default=3.0)
     p.add_argument('--fps',         type=int,   default=16)
     p.add_argument('--seed',        type=int,   default=42)
     p.add_argument('--depth_hw',    type=int,   nargs=2, default=[128, 128],

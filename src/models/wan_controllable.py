@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import time
 
+
+import torch.nn.functional as F
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
 WAN_PATH = project_root / 'Wan2.2'
