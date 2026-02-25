@@ -10,7 +10,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / 'Wan2.2'))
 
@@ -166,9 +166,9 @@ def parse_args():
     p.add_argument('--output_dir',  default='results')
     p.add_argument('--size',        default='480*832',
                    help='WAN size string e.g. 480*832 or 720*1280')
-    p.add_argument('--frame_num',   type=int, default=17,
+    p.add_argument('--frame_num',   type=int, default=81,
                    help='Frames to generate — must be 4n+1 (17, 33, 49, 81...)')
-    p.add_argument('--steps',       type=int,   default=20)
+    p.add_argument('--steps',       type=int,   default=40)
     p.add_argument('--guidance',    type=float, default=3.0)
     p.add_argument('--fps',         type=int,   default=16)
     p.add_argument('--seed',        type=int,   default=42)
