@@ -21,6 +21,7 @@ sys.path.insert(0, str(current_file.parent.parent))
 from models.control_adapter import ControlAdapter
 
 
+
 class ZeroLinear(nn.Module):
     
 
@@ -215,6 +216,7 @@ class ControllableWAN(nn.Module):
             state_dict.update(load_file(str(shard_path)))
 
         wan.load_state_dict(state_dict)
+        wan = wan.to(torch.bfloat16)
         wan = wan.eval()
 
         for param in wan.parameters():
@@ -297,6 +299,26 @@ class ControllableWAN(nn.Module):
     ) -> torch.Tensor:
 
         offload_model = True
+
+
+        if control_features is not None:
+            t0 = time.time()
+            controls_device = {k: v.to(self.device) for k, v in control_features.items()}
+            # controls_device = control_features
+            print(f"  Control move:    {time.time() - t0:.1f}s")
+
+            t0 = time.time()
+           
+            self._control_signal = self.control_adapter(controls_device)
+            del controls_device
+            torch.cuda.empty_cache()
+
+            print(f"  Control adapter: {time.time() - t0:.1f}s")
+        else:
+            self._control_signal = None
+
+
+        torch.cuda.empty_cache()
         if offload_model:
             t0 = time.time()
             self.wan.to(self.device)
@@ -306,20 +328,9 @@ class ControllableWAN(nn.Module):
         latent = latent.to(self.device)
         timesteps = timesteps.to(self.device)
 
-        if control_features is not None:
-            t0 = time.time()
-            controls_device = {k: v.to(self.device) for k, v in control_features.items()}
-            print(f"  Control move:    {time.time() - t0:.1f}s")
-
-            t0 = time.time()
-           
-            self._control_signal = self.control_adapter(controls_device)
-            print(f"  Control adapter: {time.time() - t0:.1f}s")
-        else:
-            self._control_signal = None
 
         t0 = time.time()
-        
+      
         if isinstance(prompts, torch.Tensor):
           
             text_embeddings = [prompts[i].to(self.device, dtype=torch.float32) 
@@ -328,12 +339,12 @@ class ControllableWAN(nn.Module):
          
             text_embeddings = [p.to(self.dit_device, dtype=torch.float32) for p in prompts]
         else:
-         
+            
             text_embeddings = self.encode_text(prompts)
         
         context = text_embeddings
-        x = [latent[i] for i in range(latent.shape[0])]
 
+        x = [latent[i] for i in range(latent.shape[0])]
         
 
         B, C, T, H, W = latent.shape
@@ -343,21 +354,27 @@ class ControllableWAN(nn.Module):
      
         seq_len_actual = patch_t * patch_h * patch_w
         seq_len = ((seq_len_actual + 63) // 64) * 64
-
+        
         t0 = time.time()
+       
         noise_pred = self.wan(
-            x=x,
-            t=timesteps,
-            context=context,
-            seq_len=seq_len,
-            y=None,
-        )
+                x=x,
+                t=timesteps,
+                context=context,
+                seq_len=seq_len,
+                y=None,
+            )
         print(f"  WAN forward:     {time.time() - t0:.1f}s")
 
         noise_pred = torch.stack(list(noise_pred))
         self._control_signal = None   
 
+        
+        
+        torch.cuda.empty_cache()
+       
         return noise_pred
+
 
 
 

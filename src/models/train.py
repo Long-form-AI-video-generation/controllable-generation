@@ -83,14 +83,10 @@ class MultiVideoTrainer:
         self.config       = config
         self.device       = device
 
-        if torch.cuda.device_count() > 1:
-            print(f"\n  Using {torch.cuda.device_count()} GPUs!")
-            self.model      = nn.DataParallel(model)
-            self.base_model = model
-        else:
-            print("\n  Single GPU detected")
-            self.model      = model
-            self.base_model = model
+        
+        print(f"\n  GPUs: {torch.cuda.device_count()} (cuda:0=WAN+adapter, cuda:1=VAE)")
+        self.model = model
+        self.base_model = model
 
         param_groups = self.base_model.get_trainable_parameter_groups()
        
@@ -119,7 +115,7 @@ class MultiVideoTrainer:
             num_train_timesteps=1000,
         )
 
-        self.scaler = torch.cuda.amp.GradScaler(enabled=config['mixed_precision'])
+        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
 
         self.global_step   = 0
         self.start_epoch   = 0
@@ -257,13 +253,22 @@ class MultiVideoTrainer:
    
 
     def train_step(self, batch) -> tuple[torch.Tensor, dict]:
+        
         video    = batch['video'].to(self.device)
         controls = {k: v.to(self.device) for k, v in batch['controls'].items()}
-        text_embeddings = batch['caption'].to(self.device)
+       
+        caption = batch['caption']
+        if isinstance(caption, torch.Tensor):
+            text_embeddings = caption.to(self.device)
+        else:
+            
+            text_embeddings = list(caption)
 
         with torch.no_grad():
             latent = self.base_model.encode_video(video)
         del video
+
+        
         torch.cuda.empty_cache()
 
         B = latent.shape[0]
@@ -273,6 +278,8 @@ class MultiVideoTrainer:
         noisy     = (1 - t) * latent + t * noise
         target    = noise - latent
         del latent
+        torch.cuda.empty_cache()
+       
 
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16,
                             enabled=self.config['mixed_precision']):
@@ -286,7 +293,7 @@ class MultiVideoTrainer:
         w_flow     = self.config.get('loss_flow_weight', 1.0)
         w_weighted = self.config.get('loss_weighted_weight', 0.1)
 
-        loss_flow     = f(noise_pred, target)
+        loss_flow     = flow_matching_loss(noise_pred, target)
         loss_weighted = timestep_weighted_flow_loss(noise_pred, target, timesteps)
         total_loss    = w_flow * loss_flow + w_weighted * loss_weighted
 
@@ -294,9 +301,13 @@ class MultiVideoTrainer:
         gates = torch.sigmoid(self.base_model.control_adapter.modality_gates)
         gate_entropy = -(gates * torch.log(gates + 1e-8) +
                         (1 - gates) * torch.log(1 - gates + 1e-8)).mean()
-        total_loss = total_loss + 0.01 * gate_entropy
 
-        del noisy, noise, noise_pred, controls
+        pred_frames = noise_pred.reshape(B, -1, noise_pred.shape[-1] if noise_pred.dim()==3 else noise_pred.shape[1])
+        frame_diff = (pred_frames[:, 1:] - pred_frames[:, :-1]).pow(2).mean()
+        total_loss = (total_loss + 0.05 * frame_diff)                 
+        total_loss = total_loss + 0.01 * gate_entropy
+        
+        del noisy, noise_pred, controls
         torch.cuda.empty_cache()
 
         metrics = {
@@ -320,6 +331,7 @@ class MultiVideoTrainer:
                 loss, metrics = self.train_step(batch)
 
                 loss_scaled = loss / self.config['grad_accum_steps']
+               
                 self.scaler.scale(loss_scaled).backward()
                 epoch_losses.append(metrics['loss'])
 
