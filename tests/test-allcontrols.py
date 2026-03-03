@@ -11,7 +11,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / 'Wan2.2'))
 
