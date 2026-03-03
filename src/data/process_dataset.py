@@ -19,7 +19,7 @@ def time_to_frames(time_str, fps):
         total_seconds = minutes * 60 + seconds
         return int(total_seconds * fps)
     except (ValueError, IndexError):
-        print(f"Warning: Invalid time format '{time_str}', using 0")
+        print(f"Invalid time format '{time_str}', using 0")
         return 0
 
 
@@ -35,7 +35,7 @@ def process_animeshooter_annotations(max_videos=None):
     annotations_dir = Path("data/animeshooter/annotations/video_scripts_with_ref_filtered_changed_keys")
     
     if not annotations_dir.exists():
-        print(f"\n❌ Directory not found: {annotations_dir}")
+        print(f"\nDirectory not found: {annotations_dir}")
         return None, None
     
     print(f"\n✓ Found annotations directory")
@@ -45,7 +45,7 @@ def process_animeshooter_annotations(max_videos=None):
     print(f"✓ Found {len(json_files)} JSON annotation files")
     
     if len(json_files) == 0:
-        print("\n❌ No JSON files found!")
+        print("\n No JSON files found!")
         return None, None
     
    
@@ -92,38 +92,36 @@ def process_animeshooter_annotations(max_videos=None):
                 for shot_idx, shot in enumerate(shots):
                     visual_annotation = shot.get('visual annotation', {})
                     
-                    # Get timestamps
+                  
                     start_time = shot.get('start time', '').strip()
                     end_time = shot.get('end time', '').strip()
                     
                     if not start_time or not end_time:
                         continue
                     
-                    # Calculate frame ranges
                     start_frame = time_to_frames(start_time, fps)
                     end_frame = time_to_frames(end_time, fps)
                     
-                    # Skip invalid frame ranges
+                    
                     if end_frame <= start_frame:
                         continue
                     
-                    # Create unique shot identifier using frame range
+                   
                     shot_signature = (start_frame, end_frame)
                     
-                    # Check for duplicate and skip if found
+                  
                     if shot_signature in video_shot_tracker[video_id]:
                         duplicate_stats[video_id] += 1
                         continue
                     
-                    # Mark this shot as seen
+                  
                     video_shot_tracker[video_id].add(shot_signature)
-                    
-                    # Create unique shot ID (global counter per video)
+                   
                     unique_shot_id = f"{video_id}_shot_{shot_counter:04d}"
                     shot_counter += 1
                     
                     shot_info = {
-                        'shot_id': unique_shot_id,  # Unique shot identifier
+                        'shot_id': unique_shot_id,
                         'video_id': video_id,
                         'url': url,
                         'fps': fps,
@@ -142,7 +140,7 @@ def process_animeshooter_annotations(max_videos=None):
                     
                     video_shots.append(shot_info)
             
-            # Only add video if it has valid shots
+         
             if video_shots:
                 video_info = {
                     'video_id': video_id,
@@ -156,49 +154,49 @@ def process_animeshooter_annotations(max_videos=None):
                 all_shots.extend(video_shots)
                 
         except Exception as e:
-            print(f"\n  ⚠️ Error processing {json_file.name}: {e}")
+            print(f"\n  Error processing {json_file.name}: {e}")
             continue
     
     print(f"\n✓ Processing complete!")
     
-    # Print statistics
-    print(f"\n📊 Dataset Statistics:")
+   
+    print(f"\n Dataset Statistics:")
     print(f"  Total videos: {len(all_videos)}")
     print(f"  Total unique shots: {len(all_shots)}")
     
     if len(all_videos) > 0:
         print(f"  Average shots per video: {len(all_shots) / len(all_videos):.1f}")
     
-    # Report duplicates removed
+    
     total_duplicates = sum(duplicate_stats.values())
     if total_duplicates > 0:
-        print(f"\n🔍 Duplicate Detection:")
+        print(f"\n Duplicate Detection:")
         print(f"  Total duplicates removed: {total_duplicates}")
         print(f"  Videos with duplicates: {len(duplicate_stats)}")
         
-        # Show top videos with most duplicates
+        
         top_dupes = sorted(duplicate_stats.items(), key=lambda x: x[1], reverse=True)[:5]
         if top_dupes:
             print(f"\n  Top videos with duplicates:")
             for vid_id, count in top_dupes:
                 print(f"    {vid_id}: {count} duplicates removed")
     else:
-        print(f"\n✓ No duplicate shots found!")
+        print(f"\n No duplicate shots found!")
     
-    # Verify uniqueness
-    print(f"\n🔍 Verifying shot uniqueness...")
+ 
+    print(f"\n Verifying shot uniqueness...")
     shot_id_set = set(shot['shot_id'] for shot in all_shots)
     assert len(shot_id_set) == len(all_shots), "❌ Shot IDs are not unique!"
     print(f"  ✓ All {len(all_shots)} shots have unique IDs")
     
-    # Verify frame ranges per video
-    print(f"\n🔍 Verifying frame ranges per video...")
-    for video_id in list(video_shot_tracker.keys())[:3]:  # Check first 3
+ 
+    print(f"\n Verifying frame ranges per video...")
+    for video_id in list(video_shot_tracker.keys())[:3]:  
         num_shots = len([s for s in all_shots if s['video_id'] == video_id])
         num_unique = len(video_shot_tracker[video_id])
         print(f"  ✓ {video_id}: {num_shots} shots, all with unique frame ranges")
     
-    # Show sample shots
+ 
     if all_shots:
         print(f"\n📝 Sample Shots (first 3):")
         for i, shot in enumerate(all_shots[:3], 1):
@@ -210,21 +208,19 @@ def process_animeshooter_annotations(max_videos=None):
             caption = shot['narrative_caption'][:60] + "..." if len(shot['narrative_caption']) > 60 else shot['narrative_caption']
             print(f"    Narrative: {caption}" if caption else "    Narrative: None")
     
-    # Save processed data
+   
     output_dir = Path("data/animeshooter")
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save video metadata
+  
     videos_file = output_dir / "video_urls.json"
     with open(videos_file, 'w', encoding='utf-8') as f:
         json.dump(all_videos, f, indent=2, ensure_ascii=False)
-    print(f"\n✓ Saved {len(all_videos)} videos to: {videos_file}")
+    print(f"\n Saved {len(all_videos)} videos to: {videos_file}")
     
-    # Save shot metadata
     shots_file = output_dir / "shots_metadata.json"
     with open(shots_file, 'w', encoding='utf-8') as f:
         json.dump(all_shots, f, indent=2, ensure_ascii=False)
-    print(f"✓ Saved {len(all_shots)} shots to: {shots_file}")
+    print(f" Saved {len(all_shots)} shots to: {shots_file}")
     
     return all_videos, all_shots
 def download_videos(video_list, max_videos=10, output_dir="data/animeshooter/videos"):
@@ -236,7 +232,7 @@ def download_videos(video_list, max_videos=10, output_dir="data/animeshooter/vid
     print(f"Downloading Videos (max: {max_videos})")
     print("=" * 70)
     
-    # Check if yt-dlp is installed
+   
     try:
         result = subprocess.run(
             ["yt-dlp", "--version"],
@@ -247,7 +243,7 @@ def download_videos(video_list, max_videos=10, output_dir="data/animeshooter/vid
         if result.returncode != 0:
             raise FileNotFoundError
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        print("\n❌ yt-dlp is not installed!")
+        print("\n yt-dlp is not installed!")
         print("\nPlease install it using:")
         print("  pip install yt-dlp")
         print("  # or")
@@ -292,41 +288,41 @@ def download_videos(video_list, max_videos=10, output_dir="data/animeshooter/vid
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout per video
+                timeout=600  
             )
             
             if result.returncode == 0 and output_path.exists():
-                file_size = output_path.stat().st_size / (1024 * 1024)  # MB
+                file_size = output_path.stat().st_size / (1024 * 1024)  
                 print(f"    ✓ Downloaded successfully ({file_size:.1f} MB)")
                 successful += 1
             else:
-                print(f"    ❌ Failed to download")
+                print(f"  Failed to download")
                 if result.stderr:
-                    # Show only first 200 chars of error
+                   
                     error_msg = result.stderr.strip()[:200]
                     print(f"    Error: {error_msg}")
                 failed += 1
         
         except subprocess.TimeoutExpired:
-            print(f"    ❌ Download timeout (>10 minutes)")
+            print(f" Download timeout (>10 minutes)")
             failed += 1
         except Exception as e:
-            print(f"    ❌ Error: {e}")
+            print(f" Error: {e}")
             failed += 1
     
     print(f"\n" + "=" * 70)
     print(f"Download Summary:")
-    print(f"  ✓ Successful: {successful}")
-    print(f"  ⏭️  Skipped (already exist): {skipped}")
-    print(f"  ❌ Failed: {failed}")
-    print(f"  📁 Videos saved to: {output_dir}")
+    print(f"  Successful: {successful}")
+    print(f"  Skipped (already exist): {skipped}")
+    print(f"  Failed: {failed}")
+    print(f"  Videos saved to: {output_dir}")
     print("=" * 70)
     
     return successful, failed
 def main():
     """Main workflow."""
     
-    # Step 0: Ask how many videos to process
+ 
     print("\n" + "=" * 70)
     print("AnimeShooter Dataset Setup")
     print("=" * 70)
@@ -345,14 +341,14 @@ def main():
         try:
             num_process = int(num_process)
         except:
-            print("⚠️  Invalid input, using default: 10")
+            print("  Invalid input, using default: 10")
             num_process = 10
     
 
     videos, shots = process_animeshooter_annotations(max_videos=num_process)
     
     if not videos:
-        print("\n❌ No videos found. Exiting.")
+        print("\n No videos found. Exiting.")
         return
 
     print("\n" + "=" * 70)
@@ -368,7 +364,7 @@ def main():
         
         download_videos(videos, max_videos=num_videos)
     else:
-        print("\n⏭️  Skipping download. You can download later by running:")
+        print("\n Skipping download. You can download later by running:")
         print("   python process_animeshooter.py")
     
     print("\n" + "=" * 70)

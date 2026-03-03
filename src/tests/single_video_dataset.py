@@ -9,8 +9,7 @@ import cv2
 from typing import Dict
 
 
-
-class ControllableVideoDataset(Dataset):
+class SingleVideoDataset(Dataset):
    
     def __init__(
         self,
@@ -18,10 +17,9 @@ class ControllableVideoDataset(Dataset):
         videos_dir: str,
         annotations_path: str,
         num_frames: int = 8,
-        resolution: tuple = (128, 128),
+        resolution: tuple = (256, 256),
         split: str = 'train',
-        text_encoder=None,
-        load_videos: bool = True
+        load_videos: bool = False
     ):
         """
         Args:
@@ -41,7 +39,7 @@ class ControllableVideoDataset(Dataset):
         self.load_videos = load_videos
         
         print(f"\n{'='*70}")
-        print(f"Loading mutlt-Video Dataset - {split.upper()} split")
+        print(f"Loading Single-Video Dataset - {split.upper()} split")
         print(f"{'='*70}")
         
         
@@ -74,12 +72,8 @@ class ControllableVideoDataset(Dataset):
         self.ann_lookup = {}
         for ann in split_annotations:
            
-            video_id = ann['video_id']   
-            shot_id = ann['shot_id']
-
-            key = f"{video_id}_{shot_id}"
+            key = ann['shot_id']  # ✅ CORRECT
             self.ann_lookup[key] = ann
-
         
         
         print("  Finding encoded files...")
@@ -100,8 +94,7 @@ class ControllableVideoDataset(Dataset):
                 shot_id = stem
             
            
-            key = f"{video_id}_{shot_id}"
-
+            key = shot_id 
             if key in self.ann_lookup:
                 ann = self.ann_lookup[key]
                 
@@ -125,7 +118,7 @@ class ControllableVideoDataset(Dataset):
         print(f"{'='*70}\n")
         
         if len(self.samples) == 0:
-            print(" No samples found!")
+            print("⚠️  WARNING: No samples found!")
             print(f"  Annotation keys (first 5): {list(self.ann_lookup.keys())[:5]}")
             print("  Checking encoded files...")
             enc_files = list(self.encoded_dir.rglob('*_encoded.npz'))
@@ -135,24 +128,6 @@ class ControllableVideoDataset(Dataset):
                 rel = enc_files[0].relative_to(self.encoded_dir)
                 print(f"  Example video_id: {rel.parent.name}")
                 print(f"  Example shot_id: {rel.stem.replace('_encoded', '')}")
-
-        self.text_cache = {}
-        if text_encoder is not None:
-            print("  Pre-encoding text embeddings...")
-            unique_captions = list({s['caption'] for s in self.samples})
-            print(f"  Unique captions: {len(unique_captions)} / {len(self.samples)} total")
-            
-            batch_size = 8
-            for i in range(0, len(unique_captions), batch_size):
-                batch = unique_captions[i:i+batch_size]
-                embeddings = text_encoder.encode_text(batch)
-                for caption, emb in zip(batch, embeddings):
-                    self.text_cache[caption] = emb.cpu()
-            print("  Text encoding complete.")
-        else:
-           
-            for s in self.samples:
-                self.text_cache[s['caption']] = s['caption']
     
     def __len__(self):
         return len(self.samples)
@@ -162,22 +137,9 @@ class ControllableVideoDataset(Dataset):
         if not self.load_videos:
             return torch.zeros(self.num_frames, 3, *self.resolution)
         
+        video_path = self.videos_dir / f"{video_id}.mp4"
         
-        video_paths = [
-            self.videos_dir / f"{video_id}.mp4",
-            self.videos_dir / video_id / "video.mp4",
-            self.videos_dir / video_id / f"{video_id}.mp4",
-        ]
-        
-        video_path = None
-        for path in video_paths:
-            if path.exists():
-                video_path = path
-                break
-        
-        if video_path is None:
-            print(f"⚠️  Video not found for {video_id}")
-            print(f"   Tried: {[str(p) for p in video_paths]}")
+        if not video_path.exists():
             return torch.zeros(self.num_frames, 3, *self.resolution)
         
         cap = cv2.VideoCapture(str(video_path))
@@ -220,13 +182,11 @@ class ControllableVideoDataset(Dataset):
         
         return frames
     
-    
-
     def __getitem__(self, idx) -> Dict[str, torch.Tensor]:
         sample = self.samples[idx]
         
         try:
-            # Load encoded controls
+          
             encoded = np.load(sample['encoded_path'])
             
             controls = {}
@@ -239,21 +199,17 @@ class ControllableVideoDataset(Dataset):
                 
                 controls[key] = tensor
             
-            # Load video frames
+           
             frames = self._load_video_frames(
                 sample['video_id'],
                 sample['start_frame'],
                 sample['end_frame']
             )
             
-            
-            video = frames.permute(1, 0, 2, 3)  # [T, C, H, W] -> [C, T, H, W]
-            
             return {
                 'controls': controls,
-                'video': video,  
-                # 'caption': sample['caption'],
-                'caption': self.text_cache[sample['caption']], 
+                'frames': frames,
+                'caption': sample['caption'],
                 'video_id': sample['video_id'],
                 'shot_id': sample['shot_id']
             }
@@ -269,17 +225,19 @@ class ControllableVideoDataset(Dataset):
                     'pose_encoded': torch.zeros(256, 8, 128, 128),
                     'mask_encoded': torch.zeros(256, 8, 128, 128),
                 },
-                'video': torch.zeros(3, self.num_frames, *self.resolution),
+                'frames': torch.zeros(self.num_frames, 3, *self.resolution),
                 'caption': "error loading sample",
                 'video_id': 'error',
                 'shot_id': 'error'
             }
+
+
 def test_dataset():
     """Test dataset loading"""
-    dataset = ControllableVideoDataset(
-        encoded_controls_dir='/mnt/d1/controllable-generation/encoded_controls',
-        videos_dir='/mnt/d1/controllable-generation/videos',
-        annotations_path='/mnt/d1/controllable-generation/shots_metadata.json',
+    dataset = SingleVideoDataset(
+        encoded_controls_dir='data/test_single_video/encoded_controls',
+        videos_dir='data/videos',
+        annotations_path='data/test_single_video/shots_metadata.json',
         split='train',
         load_videos=False
     )
@@ -287,12 +245,12 @@ def test_dataset():
     print(f"\nDataset size: {len(dataset)}")
     
     if len(dataset) > 0:
-        sample = dataset[100]
+        sample = dataset[0]
         print(f"\nSample structure:")
         print(f"  Controls: {list(sample['controls'].keys())}")
         for k, v in sample['controls'].items():
             print(f"    {k}: {v.shape}")
-        
+        print(f"  Frames: {sample['frames'].shape}")
         print(f"  Caption: {sample['caption'][:60]}...")
 
 

@@ -26,7 +26,7 @@ for video_id, shots in videos.items():
     print(f"  Total video length: {total_video_length:.2f} seconds ({total_video_length/60:.2f} minutes)")
     print("-" * 60)
 
-# Overall statistics
+
 total_frames_all = sum(shot['num_frames'] for shot in data)
 total_shots_all = len(data)
 avg_frames_all = total_frames_all / total_shots_all
