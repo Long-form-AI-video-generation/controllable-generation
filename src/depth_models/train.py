@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / 'Wan2.2'))
 
 from data.dataset import ControllableVideoDataset
-from models.wan_controllable import ControllableWAN
+from depth_models.wan_controllable import ControllableWAN
 
 
 

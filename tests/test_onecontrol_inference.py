@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root / 'Wan2.2'))
 
 import wan
 from wan.configs import WAN_CONFIGS, SIZE_CONFIGS, MAX_AREA_CONFIGS
-from src.models.wan_controllable import ControllableWAN
+from src.depth_models.wan_controllable import ControllableWAN
 
 
 

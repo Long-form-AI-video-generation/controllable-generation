@@ -10,7 +10,7 @@ import time
 from typing import Dict, List, Optional
 
 sys.path.append(str(Path(__file__).parent.parent))
-from models.encoders import (
+from depth_models.encoders import (
     DepthEncoder, SketchEncoder, MotionEncoder, 
     StyleEncoder, PoseEncoder, MaskEncoder
 )

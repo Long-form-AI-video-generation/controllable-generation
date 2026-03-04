@@ -20,7 +20,7 @@ from wan.modules.tokenizers import HuggingfaceTokenizer
 from wan.configs import WAN_CONFIGS
 
 sys.path.insert(0, str(current_file.parent.parent))
-from models.control_adapter import ControlAdapter
+from depth_models.control_adapter import ControlAdapter
 
 
 class ZeroLinear(nn.Module):
@@ -120,42 +120,6 @@ class ControllableWAN(nn.Module):
             self.hooks.append(hook)
 
 
-    ######################### for training ######################################
-    # def _control_injection_hook(self, module, input):
-    #     if self._control_signal is None:
-    #         return input
-
-    #     x = input[0]
-    #     B, L, C = x.shape
-    #     hook_idx = self._block_to_hook_idx[id(module)]
-    #     zero_conv = self.zero_convs[hook_idx]
-    #     ctrl = self._control_signal 
-
-    #     if ctrl.shape[1] != L:
-          
-    #         B_c, S_c, C_c = ctrl.shape
-            
-    #         T_c = S_c // (16 * 16)
-    #         ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2) 
-         
-    #         hw = L // T_c if T_c > 0 else L
-    #         h = w = int(hw ** 0.5)
-            
-    #         ctrl = nn.functional.interpolate(ctrl, size=(h, w), mode='bilinear', align_corners=False)
-    #         ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
-            
-           
-    #         if ctrl.shape[1] != L:
-    #             ctrl = ctrl.permute(0, 2, 1)
-    #             ctrl = nn.functional.interpolate(ctrl, size=L, mode='linear', align_corners=False)
-    #             ctrl = ctrl.permute(0, 2, 1)
-
-    #     ctrl = zero_conv(ctrl)
-    #     x = x + ctrl
-    #     return (x,) + input[1:]
-   
-
-    ################# for inference ########################################
     def _control_injection_hook(self, module, input):
         if self._control_signal is None:
             return input
@@ -164,18 +128,30 @@ class ControllableWAN(nn.Module):
         B, L, C = x.shape
         hook_idx = self._block_to_hook_idx[id(module)]
         zero_conv = self.zero_convs[hook_idx]
-        ctrl = self._control_signal  # (B, T*16*16, dit_dim)
+        ctrl = self._control_signal  
 
-        # Interpolate sequence dim to match current L
         if ctrl.shape[1] != L:
-            ctrl = ctrl.permute(0, 2, 1)                          # (B, C, S)
-            ctrl = F.interpolate(ctrl.float(), size=L, mode='linear', align_corners=False)
-            ctrl = ctrl.permute(0, 2, 1)                          # (B, L, C)
+            B_c, S_c, C_c = ctrl.shape
+            T_c = S_c // (16 * 16)
+
+            if T_c > 0 and S_c % (16 * 16) == 0:
+              
+                hw = L // T_c
+                h = w = int(hw ** 0.5)
+
+                ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2)
+                ctrl = F.interpolate(ctrl.float(), size=(h, w), mode='bilinear', align_corners=False)
+                ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
+
+            if ctrl.shape[1] != L:
+                ctrl = ctrl.permute(0, 2, 1)
+                ctrl = F.interpolate(ctrl.float(), size=L, mode='linear', align_corners=False)
+                ctrl = ctrl.permute(0, 2, 1)
 
         ctrl = zero_conv(ctrl)
 
-        # Safety clamp — prevent control from overwhelming DiT activations
-        x_norm   = x.norm(dim=-1, keepdim=True).mean()
+     
+        x_norm = x.norm(dim=-1, keepdim=True).mean()
         ctrl_norm = ctrl.norm(dim=-1, keepdim=True).mean()
         if ctrl_norm > 0:
             ctrl = ctrl * (x_norm / ctrl_norm).clamp(max=1.0) * 0.1
