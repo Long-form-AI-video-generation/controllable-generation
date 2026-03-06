@@ -16,6 +16,7 @@ dist/
 
 # Models & checkpoints
 /models/
+/Wan2.2/
 *.ckpt
 *.pt
 *.pth
