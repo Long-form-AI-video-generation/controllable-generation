@@ -12,6 +12,9 @@ from PIL import Image
 import torchvision.transforms as transforms
 from transformers import CLIPProcessor, CLIPModel
 import mediapipe as mp
+import urllib.request
+import ssl
+import os
 
 warnings.filterwarnings('ignore')
 
@@ -21,6 +24,9 @@ class EnhancedControlExtractor:
     """
     def __init__(self, device='cuda', models_dir='../../models',  inference_controls=False):
         self.device = device
+        self.models_dir = Path(models_dir)
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        
        
         self.models_dir= Path(__file__).resolve().parent.parent.parent / 'models'
         self.inference_controls=inference_controls
@@ -40,10 +46,52 @@ class EnhancedControlExtractor:
         
      
         self.face_detector = self.load_face_detector()
+        
+        
+        self.semantic_segmentation_model, self.seg_processor = self.load_semantic_segmentation_model()
+        
+     
+        
 
+    
         self.segmentation_model = self.load_segmentation_model()
         
         print("✓ All models loaded!\n")
+
+    def _download_file(self, url, path):
+        """Helper to download a file from a URL to a local path"""
+        path = Path(path)
+        if path.exists():
+            return True
+            
+        print(f"    Downloading {path.name} from {url}...")
+        try:
+            # Create unverified context to avoid SSL errors
+            ssl_context = ssl._create_unverified_context()
+            
+            with urllib.request.urlopen(url, context=ssl_context) as response:
+                with open(path, 'wb') as out_file:
+                    file_size = int(response.info().get('Content-Length', -1))
+                    
+                    if file_size > 0:
+                        with tqdm(total=file_size, unit='B', unit_scale=True, desc=path.name) as pbar:
+                            while True:
+                                buffer = response.read(1024 * 1024)
+                                if not buffer:
+                                    break
+                                out_file.write(buffer)
+                                pbar.update(len(buffer))
+                    else:
+                        # Fallback for unknown size
+                        out_file.write(response.read())
+                        
+            print(f"    ✓ Download complete: {path.name}")
+            return True
+        except Exception as e:
+            print(f"    ❌ Download failed: {e}")
+            if path.exists():
+                path.unlink() # Remove partial file
+            return False
     
     def load_midas_local(self):
         """Load YOUR local MiDaS weights"""
@@ -52,7 +100,10 @@ class EnhancedControlExtractor:
         midas_path = self.models_dir / "midas_v3_dpt_large.pth"
         
         if not midas_path.exists():
-            raise FileNotFoundError(f"MiDaS weights not found at {midas_path}")
+            print(f"    MiDaS weights not found at {midas_path}")
+            url = "https://github.com/isl-org/MiDaS/releases/download/v3/dpt_large_384.pt"
+            if not self._download_file(url, midas_path):
+                raise FileNotFoundError(f"Failed to download MiDaS weights to {midas_path}")
         
         try:
           
@@ -98,6 +149,12 @@ class EnhancedControlExtractor:
             model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
             
          
+            if not clip_path.exists():
+                print(f"    CLIP weights not found at {clip_path}")
+                # Downloading the specific binary file expected by the code
+                url = "https://huggingface.co/openai/clip-vit-large-patch14/resolve/main/pytorch_model.bin"
+                self._download_file(url, clip_path)
+
             if clip_path.exists():
                 print(f"    Loading weights from {clip_path.name}...")
                 state_dict = torch.load(clip_path, map_location=self.device)
@@ -131,12 +188,16 @@ class EnhancedControlExtractor:
         pidinet_path = self.models_dir / "table5_pidinet.pth"
         
         if not pidinet_path.exists():
-            print("    ⚠️  PiDiNet not found, will use Canny fallback")
-            return None
+            print(f"    PiDiNet not found locally.")
+            url = "https://huggingface.co/lllyasviel/Annotators/resolve/main/table5_pidinet.pth"
+            if not self._download_file(url, pidinet_path):
+                print("    ⚠️  PiDiNet download failed, will use Canny fallback")
+                return None
         
         try:
+        
             
-            print("    ⚠️  PiDiNet requires model definition, using Canny")
+            print("    ⚠️  PiDiNet requires model definition (not imported), using Canny")
             return None
             
         except Exception as e:
@@ -175,9 +236,14 @@ class EnhancedControlExtractor:
         print("  Loading Face Detector...")
         
       
-        anime_cascade = Path('models/lbpcascade_animeface.xml')
-        if anime_cascade.exists():
-            detector = cv2.CascadeClassifier(str(anime_cascade))
+        anime_cascade_path = self.models_dir / 'lbpcascade_animeface.xml'
+        
+        if not anime_cascade_path.exists():
+            url = "https://raw.githubusercontent.com/nagadomi/lbpcascade_animeface/master/lbpcascade_animeface.xml"
+            self._download_file(url, anime_cascade_path)
+            
+        if anime_cascade_path.exists():
+            detector = cv2.CascadeClassifier(str(anime_cascade_path))
             if not detector.empty():
                 print("    ✓ Using anime face detector")
                 return detector
@@ -189,6 +255,29 @@ class EnhancedControlExtractor:
         print("    ✓ Using default face detector")
         return detector
     
+    def load_semantic_segmentation_model(self):
+        """Load semantic segmentation model (Segformer)"""
+        print("  Loading Semantic Segmentation Model...")
+        
+        try:
+            from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
+            
+            model_name = "nvidia/segformer-b5-finetuned-ade-640-640"
+            processor = SegformerImageProcessor.from_pretrained(model_name)
+            model = SegformerForSemanticSegmentation.from_pretrained(model_name)
+            
+            model.to(self.device)
+            model.eval()
+            
+            print(f"    ✓ Loaded Segformer (150 ADE20K classes)")
+            return model, processor
+            
+        except Exception as e:
+            print(f"    ⚠️  Segmentation model loading failed: {e}")
+            print("    Using fallback: None (segmentation disabled)")
+            return None, None
+    
+   
     def load_segmentation_model(self):
       
         print("  Loading Segmentation Model...")
@@ -416,6 +505,60 @@ class EnhancedControlExtractor:
             'rotation': np.float16(rotation),
             'scale': np.float16(scale)
         }
+    
+
+    
+    
+    
+    def extract_semantic_segmentation(self, frame, target_size=(360, 640)):
+        """
+        Extract semantic segmentation using Segformer.
+        
+        Provides pixel-level scene understanding with 150 ADE20K classes,
+        enabling precise control over object boundaries and scene composition.
+        
+        Args:
+            frame: Input frame (BGR)
+            target_size: Output size (H, W)
+        
+        Returns:
+            seg_map: Segmentation map [H, W] with class indices [0-149]
+                    Returns zeros if model not available
+        """
+        if self.semantic_segmentation_model is None or self.seg_processor is None:
+            # Return empty segmentation if model not loaded
+            return np.zeros(target_size, dtype=np.uint8)
+        
+        try:
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+            
+            # Preprocess
+            inputs = self.seg_processor(images=pil_image, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            # Inference
+            with torch.no_grad():
+                outputs = self.semantic_segmentation_model(**inputs)
+                logits = outputs.logits
+            
+            # Resize to target size and get class predictions
+            logits_resized = torch.nn.functional.interpolate(
+                logits,
+                size=target_size,
+                mode='bilinear',
+                align_corners=False
+            )
+            
+            seg_map = logits_resized.argmax(dim=1).squeeze().cpu().numpy()
+            
+            return seg_map.astype(np.uint8)
+            
+        except Exception as e:
+            print(f"    ⚠️  Segmentation extraction failed: {e}")
+            return np.zeros(target_size, dtype=np.uint8)
+
 
 
     def extract_masks(self, frame):
@@ -563,6 +706,8 @@ def process_shot_with_all_controls(
             'lighting_sequence': [],
             'camera_motion': [],
             'face_detections': [],
+
+            'segmentation': [],
         }
         
         prev_frame = None
@@ -589,6 +734,10 @@ def process_shot_with_all_controls(
             
             edges = extractor.extract_edges(frame_resized)
             controls['edges'].append(edges)
+            
+
+            segmentation = extractor.extract_semantic_segmentation(frame_resized, target_size=target_size)
+            controls['segmentation'].append(segmentation)
             
             if prev_frame is not None:
                 flow = extractor.extract_optical_flow(prev_frame, frame_resized)
@@ -643,6 +792,8 @@ def process_shot_with_all_controls(
             'depth': np.stack(controls['depth']),
             'edges': np.stack(controls['edges']),
             'masks': np.stack(controls['masks']), 
+
+            'segmentation': np.stack(controls['segmentation']),
             'metadata': {
                 'video_id': video_id,
                 'shot_id': shot_idx,
