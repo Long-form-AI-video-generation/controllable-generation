@@ -1,6 +1,5 @@
 
 
-import sys
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -8,11 +7,6 @@ from pathlib import Path
 import json
 import cv2
 from typing import Dict
-
-# Reuse the adapter's canonical modality order so the positional decoding of the
-# valid_modalities array can never drift from the order it was written in.
-sys.path.append(str(Path(__file__).resolve().parent.parent))  # src/
-from models.control_adapter import MODALITY_ORDER, SPATIAL_MODALITIES
 
 
 
@@ -225,57 +219,8 @@ class ControllableVideoDataset(Dataset):
         frames = torch.from_numpy(frames).permute(0, 3, 1, 2)
         
         return frames
-
-    # Canonical modality order imported from control_adapter (single source of truth).
-    # Spatial modalities are encoded as (256, T, H, W) volumes; style is a (768,) CLIP
-    # embedding handled separately.
-    MODALITY_ORDER = MODALITY_ORDER
-    SPATIAL_MODALITIES = SPATIAL_MODALITIES
-    STYLE_DIM = 768
-
-    def _fill_and_validate(self, controls: dict, encoded) -> tuple:
-        """Guarantee all 6 canonical keys exist and return (controls, valid).
-
-        `valid[key]` is a scalar tensor (1. present, 0. absent/zero-filled). Uses the
-        authoritative `valid_modalities` array written by encode_controls.py when
-        present, otherwise falls back to nonzero detection (older encoded files).
-        """
-        flags = encoded['valid_modalities'] if 'valid_modalities' in encoded else None
-        if flags is not None and len(flags) != len(self.MODALITY_ORDER):
-            # On-disk array no longer matches the canonical layout — decoding it
-            # positionally would mask the wrong modality. Fail loudly instead.
-            raise ValueError(
-                f"valid_modalities has {len(flags)} entries but MODALITY_ORDER has "
-                f"{len(self.MODALITY_ORDER)} ({self.MODALITY_ORDER}); re-encode the data."
-            )
-
-        # Shape to zero-fill missing spatial modalities: copy a present one, else default.
-        spatial_shape = None
-        for mod in self.SPATIAL_MODALITIES:
-            key = f'{mod}_encoded'
-            if key in controls:
-                spatial_shape = tuple(controls[key].shape)
-                break
-        if spatial_shape is None:
-            spatial_shape = (256, self.num_frames, 128, 128)
-
-        valid = {}
-        for i, mod in enumerate(self.MODALITY_ORDER):
-            key = f'{mod}_encoded'
-            if mod == 'style':
-                if key not in controls:
-                    controls[key] = torch.zeros(self.STYLE_DIM)
-            else:
-                if key not in controls:
-                    controls[key] = torch.zeros(spatial_shape)
-
-            if flags is not None:
-                present = float(flags[i])
-            else:
-                present = float(controls[key].abs().sum() > 0)
-            valid[key] = torch.tensor(present, dtype=torch.float32)
-
-        return controls, valid
+    
+    
 
     def __getitem__(self, idx) -> Dict[str, torch.Tensor]:
         sample = self.samples[idx]
@@ -283,43 +228,32 @@ class ControllableVideoDataset(Dataset):
         try:
             # Load encoded controls
             encoded = np.load(sample['encoded_path'])
-
+            
             controls = {}
             for key in encoded.keys():
-                if key == 'valid_modalities':
-                    continue  # handled separately below
                 data = encoded[key]
                 tensor = torch.from_numpy(data).float()
-
-                if key == 'style_encoded':
-                    # BUG 3: style is a (1, 768) CLIP embedding -> store as (768,).
-                    tensor = tensor.reshape(-1)
-                elif tensor.dim() == 5 and tensor.shape[0] == 1:
+                
+                if tensor.dim() == 5 and tensor.shape[0] == 1:
                     tensor = tensor.squeeze(0)
-
+                
                 controls[key] = tensor
-
-            # BUG 1: guarantee all 6 canonical modalities exist and emit per-modality
-            # validity flags. Missing spatial modalities are zero-filled and marked
-            # invalid; the adapter masks them to exactly zero before gating.
-            controls, valid = self._fill_and_validate(controls, encoded)
-
+            
             # Load video frames
             frames = self._load_video_frames(
                 sample['video_id'],
                 sample['start_frame'],
                 sample['end_frame']
             )
-
-
+            
+            
             video = frames.permute(1, 0, 2, 3)  # [T, C, H, W] -> [C, T, H, W]
-
+            
             return {
                 'controls': controls,
-                'valid': valid,
-                'video': video,
+                'video': video,  
                 # 'caption': sample['caption'],
-                'caption': self.text_cache[sample['caption']],
+                'caption': self.text_cache[sample['caption']], 
                 'video_id': sample['video_id'],
                 'shot_id': sample['shot_id']
             }
@@ -331,13 +265,10 @@ class ControllableVideoDataset(Dataset):
                     'depth_encoded': torch.zeros(256, 8, 128, 128),
                     'sketch_encoded': torch.zeros(256, 8, 128, 128),
                     'motion_encoded': torch.zeros(256, 8, 128, 128),
-                    'style_encoded': torch.zeros(self.STYLE_DIM),
+                    'style_encoded': torch.zeros(256, 8, 32, 32),
                     'pose_encoded': torch.zeros(256, 8, 128, 128),
                     'mask_encoded': torch.zeros(256, 8, 128, 128),
                 },
-                # All modalities invalid: a dummy sample contributes no control gradient.
-                'valid': {f'{m}_encoded': torch.tensor(0.0, dtype=torch.float32)
-                          for m in self.MODALITY_ORDER},
                 'video': torch.zeros(3, self.num_frames, *self.resolution),
                 'caption': "error loading sample",
                 'video_id': 'error',

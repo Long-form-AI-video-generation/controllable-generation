@@ -158,19 +158,7 @@ class MultiVideoTrainer:
         print(f"\n  Resuming from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
 
-        try:
-            self.base_model.control_adapter.load_state_dict(checkpoint['model'])
-        except RuntimeError as e:
-            # Pre-style-refactor checkpoints have a different adapter architecture
-            # (6 gated modalities incl. style in the fusion path; no style_proj/style_zero).
-            # Loading them would raise a size-mismatch / missing-key RuntimeError. Turn that
-            # raw crash into a clear message and start fresh instead of resuming.
-            print("    ⚠️  Incompatible (pre-style-refactor) checkpoint — adapter "
-                  "architecture has changed (BUG 3: style moved to a cross-attention "
-                  "pathway, 6→5 gated modalities).")
-            print(f"       ({str(e)[:120]})")
-            print("    Starting training fresh; this checkpoint cannot be resumed.\n")
-            return
+        self.base_model.control_adapter.load_state_dict(checkpoint['model'])
         print("    Loaded adapter weights")
 
         if 'zero_convs' in checkpoint:
@@ -258,14 +246,9 @@ class MultiVideoTrainer:
         return stats
 
     def get_modality_gate_stats(self) -> dict:
-
+        
         gates = self.base_model.control_adapter.get_modality_weights()
-        stats = {f'gate_{k}': v for k, v in gates.items()}
-        # BUG 2: also log the raw pre-sigmoid gate logits — they move even while the
-        # sigmoid stays near 0.5, so they reveal whether the gates are actually learning.
-        logits = self.base_model.control_adapter.get_modality_logits()
-        stats.update({f'gate_logit_{k}': v for k, v in logits.items()})
-        return stats
+        return {f'gate_{k}': v for k, v in gates.items()}
 
    
 
@@ -305,7 +288,6 @@ class MultiVideoTrainer:
                 timesteps=timesteps,
                 prompts=text_embeddings,
                 control_features=controls,
-                valid_modalities=batch.get('valid'),
             )
 
         w_flow     = self.config.get('loss_flow_weight', 1.0)
@@ -456,7 +438,6 @@ class MultiVideoTrainer:
                 timesteps=timesteps,
                 prompts=text_embeddings,
                 control_features=controls,
-                valid_modalities=batch.get('valid'),
             )
 
         loss_flow = flow_matching_loss(noise_pred, target)
@@ -600,10 +581,8 @@ def main():
 
 
     with torch.no_grad():
-        # One gate per spatial modality (style no longer gated — BUG 3).
-        n_gates = trainer.base_model.control_adapter.modality_gates.numel()
         trainer.base_model.control_adapter.modality_gates.copy_(
-        torch.randn(n_gates) * 0.1
+        torch.randn(6) * 0.1
     )
     print("Gates reset:", torch.sigmoid(trainer.base_model.control_adapter.modality_gates))
 

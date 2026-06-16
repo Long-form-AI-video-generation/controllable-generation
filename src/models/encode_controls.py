@@ -11,20 +11,8 @@ from typing import Dict, List, Optional
 
 sys.path.append(str(Path(__file__).parent.parent))
 from models.encoders import (
-    DepthEncoder, SketchEncoder, MotionEncoder,
+    DepthEncoder, SketchEncoder, MotionEncoder, 
     StyleEncoder, PoseEncoder, MaskEncoder
-)
-from models.control_adapter import MODALITY_ORDER
-
-# The valid_modalities array written below is decoded POSITIONALLY downstream
-# (dataset.py, tests/test-allcontrols.py), so its order is a hard on-disk contract.
-# Pin it here: if MODALITY_ORDER is ever reordered, encoding fails loudly at import
-# rather than silently changing the meaning of every npz written afterwards.
-_VALID_MODALITIES_CONTRACT = ['depth', 'mask', 'motion', 'pose', 'sketch', 'style']
-assert MODALITY_ORDER == _VALID_MODALITIES_CONTRACT, (
-    f"MODALITY_ORDER {MODALITY_ORDER} no longer matches the on-disk valid_modalities "
-    f"contract {_VALID_MODALITIES_CONTRACT}; reordering silently corrupts every "
-    f"previously-encoded npz. Migrate the data or keep the order."
 )
 
 
@@ -275,105 +263,89 @@ class ControlEncoderProcessor:
            
             data = np.load(file_info['input_path'], allow_pickle=True)
             encoded = {}
-            # BUG 1: track which modalities are genuinely present (1.0) vs absent /
-            # zero-filled (0.0). Written into the npz as a (6,) array in the adapter's
-            # canonical sorted order so training can mask absent modalities exactly.
-            valid = {m: 0.0 for m in MODALITY_ORDER}
-
+            
             with torch.no_grad():
-
+               
                 if 'depth' in data:
                     try:
                         tensor = self._prepare_depth(data['depth'])
                         enc = self.encoders['depth'](tensor)
                         encoded['depth_encoded'] = enc.cpu().numpy().astype(np.float16)
-                        valid['depth'] = 1.0
                     except Exception as e:
                         result['errors'].append(f"depth: {str(e)[:50]}")
-
-
+                
+               
                 if 'edges' in data:
                     try:
                         tensor = self._prepare_edges(data['edges'])
                         enc = self.encoders['sketch'](tensor)
                         encoded['sketch_encoded'] = enc.cpu().numpy().astype(np.float16)
-                        valid['sketch'] = 1.0
                     except Exception as e:
                         result['errors'].append(f"edges: {str(e)[:50]}")
-
+               
                 if 'flow' in data and data['flow'].shape[0] > 0:
                     try:
                         tensor = self._prepare_flow(data['flow'])
                         enc = self.encoders['motion'](tensor)
                         encoded['motion_encoded'] = enc.cpu().numpy().astype(np.float16)
-                        valid['motion'] = 1.0
                     except Exception as e:
                         result['errors'].append(f"flow: {str(e)[:50]}")
-
+                        
                         encoded['motion_encoded'] = np.zeros(
-                            (1, 256, self.num_frames, 128, 128),
+                            (1, 256, self.num_frames, 128, 128), 
                             dtype=np.float16
                         )
                 else:
-
+                   
                     encoded['motion_encoded'] = np.zeros(
-                        (1, 256, self.num_frames, 128, 128),
+                        (1, 256, self.num_frames, 128, 128), 
                         dtype=np.float16
                     )
-
-                # BUG 3: style no longer goes through the 3D-CNN StyleEncoder. The raw
-                # normalised 768-dim CLIP image embedding (extract_control.py's
-                # 'style_embedding') is passed straight through as a (1, 768) vector;
-                # the adapter projects it into cross-attention tokens.
-                if 'style_embedding' in data and data['style_embedding'] is not None:
+                
+             
+                if 'reference_frame' in data:
                     try:
-                        style_emb = np.asarray(data['style_embedding']).reshape(1, -1)
-                        encoded['style_encoded'] = style_emb.astype(np.float16)
-                        valid['style'] = 1.0
+                        tensor = self._prepare_reference(data['reference_frame'])
+                        enc = self.encoders['style'](tensor, num_frames=self.num_frames)
+                        encoded['style_encoded'] = enc.cpu().numpy().astype(np.float16)
                     except Exception as e:
                         result['errors'].append(f"style: {str(e)[:50]}")
-
+                
                 if 'pose_sequence' in data:
                     try:
                         tensor = self._prepare_pose(data['pose_sequence'])
                         enc = self.encoders['pose'](tensor)
                         encoded['pose_encoded'] = enc.cpu().numpy().astype(np.float16)
-                        valid['pose'] = 1.0
                     except Exception as e:
                         result['errors'].append(f"pose: {str(e)[:50]}")
-
+                       
                         encoded['pose_encoded'] = np.zeros(
-                            (1, 256, self.num_frames, 128, 128),
+                            (1, 256, self.num_frames, 128, 128), 
                             dtype=np.float16
                         )
                 else:
-
+                    
                     encoded['pose_encoded'] = np.zeros(
-                        (1, 256, self.num_frames, 128, 128),
+                        (1, 256, self.num_frames, 128, 128), 
                         dtype=np.float16
                     )
-
-
+            
+               
                 if 'masks' in data:
                     try:
                         tensor = self._prepare_mask(data['masks'])
                         enc = self.encoders['mask'](tensor)
                         encoded['mask_encoded'] = enc.cpu().numpy().astype(np.float16)
-                        valid['mask'] = 1.0
                     except Exception as e:
                         result['errors'].append(f"mask: {str(e)[:50]}")
-
-
-                # Keep the file only if enough real modalities encoded. Count *_encoded
-                # keys (not valid_modalities) so the threshold semantics are unchanged.
-                n_modalities = sum(1 for k in encoded if k.endswith('_encoded'))
-                if n_modalities >= 4:
-                    valid_arr = np.array([valid[m] for m in MODALITY_ORDER], dtype=np.float32)
-                    assert len(valid_arr) == len(MODALITY_ORDER)
-                    encoded['valid_modalities'] = valid_arr
+                
+               
+                
+               
+                if len(encoded) >= 4:  
                     np.savez_compressed(file_info['output_path'], **encoded)
                     result['success'] = True
-                    result['encodings'] = n_modalities
+                    result['encodings'] = len(encoded)
                     result['size_mb'] = file_info['output_path'].stat().st_size / 1e6
             
         except Exception as e:
