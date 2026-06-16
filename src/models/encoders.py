@@ -334,52 +334,141 @@ class StyleEncoder(nn.Module):
 
 
 class MaskEncoder(nn.Module):
+    """
+    Unified encoder for both binary masks and semantic segmentation maps.
     
-    def __init__(self, out_channels: int = 256):
+    Supports:
+    - Binary masks: Single-channel float tensors with values in [0, 1]
+    - Semantic segmentation: Integer tensors with class indices [0, num_classes-1]
+    
+    The encoder automatically detects the input type and processes accordingly.
+    
+    Key Features:
+    - Learnable class embeddings for semantic segmentation (optional)
+    - Multi-scale feature processing
+    - Boundary-aware refinement
+    - Temporal consistency propagation
+    """
+    
+    def __init__(self, out_channels: int = 256, num_classes: Optional[int] = None):
         super().__init__()
         
-      
+        self.num_classes = num_classes
+        
+        # Optional: Learnable class embeddings for semantic segmentation
+        if num_classes is not None:
+            self.class_embeddings = nn.Embedding(num_classes, 64)
+            self.embed_proj = ConvBlock3D(
+                64, 64,
+                kernel_size=(1, 3, 3),
+                padding=(0, 1, 1)
+            )
+        else:
+            self.class_embeddings = None
+            self.embed_proj = None
+        
+        # Stem: Initial feature extraction
         self.stem = ConvBlock3D(
-            1, 64,
+            1 if num_classes is None else 64, 64,
             kernel_size=(1, 7, 7),  
             padding=(0, 3, 3)
         )
         
-      
-        self.stage1 = ConvBlock3D(64, 128, kernel_size=(1, 5, 5), padding=(0, 2, 2))
-        self.stage2 = ConvBlock3D(128, 128, kernel_size=(1, 3, 3), padding=(0, 1, 1))
+        # Multi-scale processing for better feature extraction
+        self.scale1 = ConvBlock3D(64, 64, kernel_size=(1, 3, 3), padding=(0, 1, 1))
+        self.scale2 = ConvBlock3D(64, 64, kernel_size=(1, 5, 5), padding=(0, 2, 2))
         
-       
-        self.downsample = nn.Sequential(
-            SpatialDownsample(128, factor=2),
-            ConvBlock3D(128, out_channels),
+        # Fusion of multi-scale features
+        self.fusion = ConvBlock3D(64 * 2, 128)
+        
+        # Boundary-aware refinement
+        self.boundary_refine = nn.Sequential(
+            ConvBlock3D(128, 128, kernel_size=(1, 3, 3), padding=(0, 1, 1)),
+            ResBlock3D(128),
         )
         
-       
+        # Downsample and increase channels
+        self.downsample = nn.Sequential(
+            SpatialDownsample(128, factor=2),
+            ConvBlock3D(128, 256),
+            ResBlock3D(256),
+        )
+        
+        # Temporal consistency propagation
         self.temporal_prop = ConvBlock3D(
-            out_channels, out_channels,
+            256, out_channels,
             kernel_size=(3, 1, 1),
             padding=(1, 0, 0)
         )
         
-       
+        # Output projection
         self.output_proj = nn.Conv3d(out_channels, out_channels, 1)
         nn.init.xavier_uniform_(self.output_proj.weight, gain=0.02)
         nn.init.zeros_(self.output_proj.bias)
     
     def forward(self, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            mask: Either binary mask [B, 1, T, H, W] or [B, T, H, W] with values in [0, 1]
+                  OR semantic segmentation [B, 1, T, H, W] or [B, T, H, W] with class indices
         
+        Returns:
+            features: Encoded features [B, out_channels, T, H/2, W/2]
+        """
+        # Handle input format
         if mask.dim() == 4:
-            mask = mask.unsqueeze(1)
+            mask = mask.unsqueeze(1)  # [B, 1, T, H, W]
         
-      
-        mask = (mask > 0.5).float()
+        # Auto-detect input type: semantic segmentation (int) vs binary mask (float)
+        is_semantic = mask.dtype in [
+            torch.long,
+            torch.int,
+            torch.int32,
+            torch.int64,
+            torch.uint8,
+            torch.bool,
+        ]
         
-        x = self.stem(mask)         # [B, 64, T, H, W]
-        x = self.stage1(x)          # [B, 128, T, H, W]
-        x = self.stage2(x)          # [B, 128, T, H, W]
-        x = self.downsample(x)      # [B, 256, T, H/2, W/2]
-        x = self.temporal_prop(x)   # [B, 256, T, H/2, W/2]
+        if is_semantic and self.class_embeddings is not None:
+            # Process semantic segmentation
+            B, _, T, H, W = mask.shape
+            
+            # Remove channel dimension and ensure long type
+            seg_map = mask.squeeze(1).long()  # [B, T, H, W]
+            
+            # Clamp to valid class range
+            seg_map = torch.clamp(seg_map, 0, self.num_classes - 1)
+            
+            # Get class embeddings for each pixel
+            embeddings = self.class_embeddings(seg_map)  # [B, T, H, W, 64]
+            
+            # Rearrange to [B, 64, T, H, W]
+            x = embeddings.permute(0, 4, 1, 2, 3)
+            
+            # Process embeddings
+            x = self.embed_proj(x)  # [B, 64, T, H, W]
+        else:
+            # Process binary mask
+            # Binarize mask
+            mask = (mask > 0.5).float()
+            x = self.stem(mask)  # [B, 64, T, H, W]
+        
+        # Multi-scale processing
+        s1 = self.scale1(x)  # Fine details
+        s2 = self.scale2(x)  # Coarse structures
+        
+        # Fuse scales
+        x = torch.cat([s1, s2], dim=1)  # [B, 128, T, H, W]
+        x = self.fusion(x)               # [B, 128, T, H, W]
+        
+        # Boundary refinement
+        x = self.boundary_refine(x)      # [B, 128, T, H, W]
+        
+        # Downsample and increase capacity
+        x = self.downsample(x)           # [B, 256, T, H/2, W/2]
+        
+        # Temporal consistency
+        x = self.temporal_prop(x)        # [B, out_channels, T, H/2, W/2]
         x = self.output_proj(x)
         
         return x
@@ -427,9 +516,3 @@ class PoseEncoder(nn.Module):
         x = self.output_proj(x)
         
         return x
-
-
-
-
-
-   
