@@ -6,7 +6,7 @@ import time
 
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
-WAN_PATH = project_root / 'Wan2.2'
+WAN_PATH = project_root / 'src' / 'Wan2.2'
 
 if not WAN_PATH.exists():
     raise RuntimeError(f"WAN directory not found at {WAN_PATH}")
@@ -183,25 +183,38 @@ class ControllableWAN(nn.Module):
         ctrl = self._control_signal 
 
         if ctrl.shape[1] != L:
-          
             B_c, S_c, C_c = ctrl.shape
-            
             T_c = S_c // (16 * 16)
-            ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2) 
-         
-            hw = L // T_c if T_c > 0 else L
-            h = w = int(hw ** 0.5)
-            
-            ctrl = nn.functional.interpolate(ctrl, size=(h, w), mode='bilinear', align_corners=False)
-            ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
-            
-           
-            if ctrl.shape[1] != L:
-                ctrl = ctrl.permute(0, 2, 1)
-                ctrl = nn.functional.interpolate(ctrl, size=L, mode='linear', align_corners=False)
-                ctrl = ctrl.permute(0, 2, 1)
 
+            F_real, H_real, W_real = self.wan._last_grid_sizes[0].tolist()
+
+            # reshape control to (B*T_c, C, 16, 16) for 2D spatial interpolation
+            ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2)
+            ctrl = nn.functional.interpolate(
+                ctrl, size=(H_real, W_real), mode='bilinear', align_corners=False
+            )
+            # back to (B_c, T_c, H_real, W_real, C_c) -> (B_c, T_c, H_real*W_real, C_c)
+            ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c, H_real * W_real, C_c)
+
+            if T_c != F_real:
+                # interpolate along the temporal axis only, independent of spatial dims
+                HW = H_real * W_real
+                ctrl = ctrl.permute(0, 2, 3, 1)          # (B_c, HW, C_c, T_c)
+                ctrl = ctrl.reshape(B_c * HW, C_c, T_c)   # collapse to 3D for linear interp
+                ctrl = nn.functional.interpolate(
+                    ctrl, size=F_real, mode='linear', align_corners=False
+                )
+                ctrl = ctrl.reshape(B_c, HW, C_c, F_real)
+                ctrl = ctrl.permute(0, 3, 1, 2)           # (B_c, F_real, HW, C_c)
+
+            ctrl = ctrl.reshape(B_c, F_real * H_real * W_real, C_c)
+
+            assert ctrl.shape[1] == L, f"grid mismatch after fix: ctrl={ctrl.shape[1]} vs L={L}"
         ctrl = zero_conv(ctrl)
+        control_scale = getattr(self, '_control_scale', 0.3)
+        ctrl = ctrl * control_scale
+        if hook_idx == 0:
+            print(f"[MAGNITUDE DEBUG] hook_idx={hook_idx} x.mean()={x.mean().item():.4f} x.std()={x.std().item():.4f} ctrl.mean()={ctrl.mean().item():.4f} ctrl.std()={ctrl.std().item():.4f} ctrl.norm()={ctrl.norm().item():.4f} scale={control_scale}")
         x = x + ctrl
         return (x,) + input[1:]
 
@@ -303,7 +316,7 @@ class ControllableWAN(nn.Module):
 
     def encode_video(self, video: torch.Tensor) -> torch.Tensor:
         vae_device = torch.device('cuda:1')
-        output_device = torch.device('cuda:0')
+        output_device = torch.device(self.device)
         video = video.to(vae_device)
         self.vae.device = vae_device
         with torch.no_grad():
@@ -313,7 +326,7 @@ class ControllableWAN(nn.Module):
 
     def decode_video(self, latent: torch.Tensor) -> torch.Tensor:
         vae_device = torch.device('cuda:1')
-        output_device = torch.device('cuda:0')
+        output_device = torch.device(self.device)
         latent = latent.to(vae_device)
         self.vae.device = vae_device
         with torch.no_grad():
@@ -324,7 +337,7 @@ class ControllableWAN(nn.Module):
     def encode_text(self, prompts: list) -> list:
         t5_compute_device = (
             torch.device('cuda:1') if torch.cuda.device_count() > 1
-            else torch.device('cuda:0')
+            else torch.device('cuda:1')
         )
         with torch.no_grad():
             self.text_encoder.model.to(t5_compute_device)
@@ -470,7 +483,7 @@ def test_controllable_wan():
     print("=" * 70)
 
     model = ControllableWAN(
-        checkpoint_dir='Wan2.2/Wan2.2-TI2V-5B',
+        checkpoint_dir='/mnt/d1/jedidiah/models/Wan2.2-TI2V-5B',
         device='cuda',
     )
 

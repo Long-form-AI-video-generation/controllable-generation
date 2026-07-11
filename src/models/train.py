@@ -534,9 +534,9 @@ def main():
         'save_every':  1000,
         'val_every':   500,
 
-        'checkpoint_dir':  'checkpoints/multi_video',
-        'data_dir':        '/mnt/d1/controllable-generation',
-        'checkpoint_path': 'Wan2.2/Wan2.2-TI2V-5B',
+        'checkpoint_dir':  '/mnt/d1/jedidiah/checkpoints/multi_video',
+        'data_dir':        '/mnt/d1/jedidiah/data',
+        'checkpoint_path': '/mnt/d1/jedidiah/models/Wan2.2-TI2V-5B',
     }
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

@@ -50,23 +50,27 @@ class EnhancedControlExtractor:
         print("  Loading MiDaS (local)...")
         
         midas_path = self.models_dir / "midas_v3_dpt_large.pth"
-        
+        model_type = "DPT_Large"
+
         if not midas_path.exists():
-            raise FileNotFoundError(f"MiDaS weights not found at {midas_path}")
-        
+            print(f"    ⚠️  MiDaS weights not found at {midas_path}, downloading default...")
+            midas = torch.hub.load("intel-isl/MiDaS", model_type)
+            midas.to(self.device)
+            midas.eval()
+
+            midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+            transform = midas_transforms.dpt_transform
+            return midas, transform
+
         try:
-          
-            model_type = "DPT_Large"
             midas = torch.hub.load("intel-isl/MiDaS", model_type, pretrained=False)
             
-         
             checkpoint = torch.load(midas_path, map_location=self.device)
             midas.load_state_dict(checkpoint)
             
             midas.to(self.device)
             midas.eval()
             
-         
             midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
             transform = midas_transforms.dpt_transform
             
@@ -265,6 +269,12 @@ class EnhancedControlExtractor:
         
         with torch.no_grad():
             image_features = self.clip_model.get_image_features(**inputs)
+            # transformers 5.x wraps this in a structured output object;
+            # older versions return the tensor directly
+            if hasattr(image_features, 'image_embeds'):
+                image_features = image_features.image_embeds
+            elif hasattr(image_features, 'pooler_output'):
+                image_features = image_features.pooler_output
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         
         return image_features.cpu().numpy().astype(np.float16)
