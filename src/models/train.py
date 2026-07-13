@@ -166,7 +166,7 @@ class MultiVideoTrainer:
             # Loading them would raise a size-mismatch / missing-key RuntimeError. Turn that
             # raw crash into a clear message and start fresh instead of resuming.
             print("    ⚠️  Incompatible (pre-style-refactor) checkpoint — adapter "
-                  "architecture has changed (BUG 3: style moved to a cross-attention "
+                  "architecture has changed (style moved to a cross-attention "
                   "pathway, 6→5 gated modalities).")
             print(f"       ({str(e)[:120]})")
             print("    Starting training fresh; this checkpoint cannot be resumed.\n")
@@ -261,7 +261,7 @@ class MultiVideoTrainer:
 
         gates = self.base_model.control_adapter.get_modality_weights()
         stats = {f'gate_{k}': v for k, v in gates.items()}
-        # BUG 2: also log the raw pre-sigmoid gate logits — they move even while the
+        # also log the raw pre-sigmoid gate logits — they move even while the
         # sigmoid stays near 0.5, so they reveal whether the gates are actually learning.
         logits = self.base_model.control_adapter.get_modality_logits()
         stats.update({f'gate_logit_{k}': v for k, v in logits.items()})
@@ -600,7 +600,7 @@ def main():
 
 
     with torch.no_grad():
-        # One gate per spatial modality (style no longer gated — BUG 3).
+        # One gate per spatial modality (style no longer gated).
         n_gates = trainer.base_model.control_adapter.modality_gates.numel()
         trainer.base_model.control_adapter.modality_gates.copy_(
         torch.randn(n_gates) * 0.1

@@ -1,15 +1,15 @@
-"""Regression tests for the ControlAdapter contract (BUG 1 / BUG 2 / BUG 3 fixes).
+"""Regression tests for the ControlAdapter contract.
 
 These pin the behaviours that the session's three bug fixes established, so a future
 refactor that breaks them fails loudly instead of silently corrupting training:
 
   * forward() returns the tuple (control_signal, style_tokens) with the documented shapes
   * an invalid (zero-filled) modality is masked to EXACTLY zero before gating, so its
-    input cannot change the output and its gate logit receives ZERO gradient (BUG 1)
-  * style tokens are EXACTLY zero at init via the zero-initialised style_zero proj (BUG 3)
-  * there are 5 gate logits / weights — one per spatial modality, style is not gated (BUG 3)
+    input cannot change the output and its gate logit receives ZERO gradient
+  * style tokens are EXACTLY zero at init via the zero-initialised style_zero proj
+  * there are 5 gate logits / weights — one per spatial modality, style is not gated
   * the style-append cross-attention hook fails safe (no-op) on an unexpected context
-    layout and respects WAN's text_len cap (BUG 3) — skipped if Wan2.2 isn't importable
+    layout and respects WAN's text_len cap — skipped if Wan2.2 isn't importable
 
 No pytest dependency (the repo has no test runner): run it directly.
 
@@ -103,7 +103,7 @@ def test_style_tokens_zero_at_init():
 
 def test_invalid_modality_does_not_change_output():
     """An invalid spatial modality is masked to zero before fusion, so its input value
-    cannot affect control_signal at all (BUG 1)."""
+    cannot affect control_signal at all."""
     a = _make_adapter()
     valid = _all_valid()
     valid['motion_encoded'] = torch.zeros(B)  # mark motion invalid
@@ -121,7 +121,7 @@ def test_invalid_modality_does_not_change_output():
 
 def test_invalid_modality_zero_gate_grad():
     """The gate logit of an invalid modality receives zero gradient; a valid one does not
-    (BUG 1: masked before gating => d/dgate of (proj*0*gate) == 0)."""
+    (masked before gating => d/dgate of (proj*0*gate) == 0)."""
     a = _make_adapter()
     valid = _all_valid()
     valid['motion_encoded'] = torch.zeros(B)  # motion invalid, everything else valid
@@ -170,7 +170,7 @@ def test_wrong_spatial_count_raises():
 
 
 def test_style_injection_hook_failsafe():
-    """The cross-attention style hook (BUG 3) must:
+    """The cross-attention style hook must:
       * no-op when no style tokens are set,
       * append style tokens to a well-formed context list,
       * leave an unexpected-layout context (e.g. CFG-doubled batch) untouched,

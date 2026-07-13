@@ -275,7 +275,7 @@ class ControlEncoderProcessor:
            
             data = np.load(file_info['input_path'], allow_pickle=True)
             encoded = {}
-            # BUG 1: track which modalities are genuinely present (1.0) vs absent /
+            # track which modalities are genuinely present (1.0) vs absent /
             # zero-filled (0.0). Written into the npz as a (6,) array in the adapter's
             # canonical sorted order so training can mask absent modalities exactly.
             valid = {m: 0.0 for m in MODALITY_ORDER}
@@ -321,7 +321,7 @@ class ControlEncoderProcessor:
                         dtype=np.float16
                     )
 
-                # BUG 3: style no longer goes through the 3D-CNN StyleEncoder. The raw
+                # style no longer goes through the 3D-CNN StyleEncoder. The raw
                 # normalised 768-dim CLIP image embedding (extract_control.py's
                 # 'style_embedding') is passed straight through as a (1, 768) vector;
                 # the adapter projects it into cross-attention tokens.

@@ -87,10 +87,10 @@ def extract_and_encode_all_controls(
                 k: torch.from_numpy(encoded[k]).float().to(device)
                 for k in encoded.keys() if k != 'valid_modalities'
             }
-            # BUG 1: authoritative per-modality validity, in sorted order.
+            # authoritative per-modality validity, in sorted order.
             valid_arr = encoded['valid_modalities'] if 'valid_modalities' in encoded else None
 
-    # style_encoded is now a (1, 768) CLIP embedding (BUG 3); spatial modalities are
+    # style_encoded is now a (1, 768) CLIP embedding; spatial modalities are
     # (1, 256, T, H, W). Derive the spatial zero-fill shape from a present spatial key.
     spatial_shape = None
     for k, v in controls.items():
@@ -133,7 +133,7 @@ def activate_adapter(controllable_wan: ControllableWAN, control_features: dict,
             control_features, valid_modalities
         )
     controllable_wan._control_signal = ctrl
-    # BUG 3: the style hook on self.wan appends these to the cross-attention context.
+    # the style hook on self.wan appends these to the cross-attention context.
     controllable_wan._style_tokens = style_tokens
 
     gates = controllable_wan.control_adapter.get_modality_weights()
@@ -390,7 +390,7 @@ def main():
     )
 
     # Keep only user-selected modalities active; everything else is zero-filled AND
-    # marked invalid so the adapter masks it to exactly zero (BUG 1). Each key keeps its
+    # marked invalid so the adapter masks it to exactly zero. Each key keeps its
     # own shape — spatial volumes vs the (1, 768) style embedding.
     adapter_controls = {}
     adapter_valid = {}
@@ -425,7 +425,7 @@ def main():
         # message instead of a raw size-mismatch traceback.
         raise SystemExit(
             "ERROR: checkpoint is incompatible with the current adapter architecture "
-            "(BUG 3: style moved to a cross-attention pathway, 6->5 gated modalities). "
+            "(style moved to a cross-attention pathway, 6->5 gated modalities). "
             "Retrain with the updated trainer.\n  Details: " + str(e)[:160]
         )
     if 'zero_convs' in ckpt:

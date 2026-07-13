@@ -36,7 +36,7 @@ class ControlAdapter(nn.Module):
         self.num_controls = num_controls
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
-        # BUG 3: style is removed from the spatial fusion path; only the 5 spatial
+        # style is removed from the spatial fusion path; only the 5 spatial
         # modalities below go through control_projections / fusion / gates.
         self.num_spatial = len(self.SPATIAL_MODALITIES)
         self.style_dim = style_dim
@@ -64,7 +64,7 @@ class ControlAdapter(nn.Module):
         # One gate per spatial modality (style no longer has a gate).
         self.modality_gates = nn.Parameter(torch.randn(self.num_spatial) * 0.1)
 
-        # BUG 3: style token pathway. CLIP style embedding -> N text-context tokens,
+        # style token pathway. CLIP style embedding -> N text-context tokens,
         # ending in a zero-initialised projection so style influence starts at exactly 0
         # (ControlNet zero-conv style init); injected via cross-attention in wan_controllable.
         self.style_proj = nn.Linear(style_dim, num_style_tokens * text_dim)
@@ -101,7 +101,7 @@ class ControlAdapter(nn.Module):
             control_features: dict[str → Tensor]. Spatial modalities are (B, 256, T, H, W);
                               'style_encoded' is a (B, style_dim) CLIP embedding.
             valid_modalities: optional dict[str → Tensor(B,)] of 1.0/0.0 flags marking which
-                              modalities are genuinely present (BUG 1). Absent modalities
+                              modalities are genuinely present. Absent modalities
                               (e.g. zero-filled motion/pose) are masked to exactly zero BEFORE
                               gating, so neither the fusion nor the gate receives gradient from
                               them.
@@ -112,7 +112,7 @@ class ControlAdapter(nn.Module):
               style_tokens:   Tensor(B, num_style_tokens, text_dim) — appended to the text
                               cross-attention context; exactly zero at init.
         """
-        # BUG 3: style is handled by a separate cross-attention pathway, not spatial fusion.
+        # style is handled by a separate cross-attention pathway, not spatial fusion.
         style_feat = control_features['style_encoded']
         spatial_keys = sorted(k for k in control_features.keys() if k != 'style_encoded')
 
@@ -142,7 +142,7 @@ class ControlAdapter(nn.Module):
             else:
                 proj = self.control_projections[idx](feat)
 
-            # BUG 1: mask absent modalities to exactly zero BEFORE gating.
+            # mask absent modalities to exactly zero BEFORE gating.
             if valid_modalities is not None and key in valid_modalities:
                 valid = valid_modalities[key].to(proj.dtype).view(-1, 1, 1)
                 proj = proj * valid
@@ -160,14 +160,14 @@ class ControlAdapter(nn.Module):
         else:
             control_signal = self.fusion(combined)
 
-        # BUG 3: style token pathway (zero at init via self.style_zero).
+        # style token pathway (zero at init via self.style_zero).
         if style_feat.dim() > 2:
             style_feat = style_feat.reshape(style_feat.shape[0], -1)
         style_tokens = self.style_proj(style_feat)
         style_tokens = style_tokens.view(-1, self.num_style_tokens, self.text_dim)
         style_tokens = self.style_zero(style_tokens)
 
-        # BUG 1: mask absent style to exactly zero as well.
+        # mask absent style to exactly zero as well.
         if valid_modalities is not None and 'style_encoded' in valid_modalities:
             valid = valid_modalities['style_encoded'].to(style_tokens.dtype).view(-1, 1, 1)
             style_tokens = style_tokens * valid
@@ -180,7 +180,7 @@ class ControlAdapter(nn.Module):
         return {mod: float(gates[i]) for i, mod in enumerate(self.SPATIAL_MODALITIES)}
 
     def get_modality_logits(self) -> dict:
-        """Raw (pre-sigmoid) gate logits, per spatial modality (BUG 2 logging)."""
+        """Raw (pre-sigmoid) gate logits, per spatial modality (logging)."""
         logits = self.modality_gates.detach().cpu()
         return {mod: float(logits[i]) for i, mod in enumerate(self.SPATIAL_MODALITIES)}
 

@@ -72,7 +72,7 @@ class ControllableWAN(nn.Module):
 
         print("  [4/5] Creating ControlAdapter...")
         # Style tokens are appended to WAN's text cross-attention context, so they must
-        # match the T5 context dim (BUG 3). Derive it from the WAN config when available.
+        # match the T5 context dim. Derive it from the WAN config when available.
         text_dim = getattr(self.wan.config, 'text_dim', 4096)
         self.control_adapter = ControlAdapter(
             control_dim=256,
@@ -96,7 +96,7 @@ class ControllableWAN(nn.Module):
 
       
         self._control_signal: torch.Tensor | None = None
-        # BUG 3: style cross-attention tokens, injected into WAN's context by a
+        # style cross-attention tokens, injected into WAN's context by a
         # forward-pre-hook on self.wan (set during forward / activate_adapter).
         self._style_tokens: torch.Tensor | None = None
 
@@ -126,7 +126,7 @@ class ControllableWAN(nn.Module):
             hook = block.register_forward_pre_hook(self._control_injection_hook)
             self.hooks.append(hook)
 
-        # BUG 3: top-level hook that appends style tokens to the cross-attention context.
+        # top-level hook that appends style tokens to the cross-attention context.
         # Registered once on the WAN DiT so both training (this module's forward) and
         # inference (WAN pipeline calling self.wan directly) share one injection path.
         self.hooks.append(
@@ -368,7 +368,7 @@ class ControllableWAN(nn.Module):
 
         offload_model = True
 
-        # style_tokens are appended to the text cross-attention context below (BUG 3);
+        # style_tokens are appended to the text cross-attention context below;
         # None for the base / no-control run so the context is left untouched.
         style_tokens = None
 
@@ -420,7 +420,7 @@ class ControllableWAN(nn.Module):
         
         context = text_embeddings
 
-        # BUG 3: stash style tokens; the forward-pre-hook on self.wan appends them to the
+        # stash style tokens; the forward-pre-hook on self.wan appends them to the
         # cross-attention context. Doing it in the hook (not here) means inference — which
         # calls self.wan via the WAN pipeline, not this forward — gets style injection too.
         self._style_tokens = style_tokens
@@ -496,7 +496,7 @@ def test_controllable_wan():
         'depth_encoded':  torch.randn(B, 256, 8, 128, 128).cuda(),
         'sketch_encoded': torch.randn(B, 256, 8, 128, 128).cuda(),
         'motion_encoded': torch.randn(B, 256, 8, 128, 128).cuda(),
-        'style_encoded':  torch.randn(B, 768).cuda(),  # BUG 3: raw CLIP embedding
+        'style_encoded':  torch.randn(B, 768).cuda(),  # raw CLIP embedding
         'pose_encoded':   torch.randn(B, 256, 8, 128, 128).cuda(),
         'mask_encoded':   torch.randn(B, 256, 8, 128, 128).cuda(),
     }

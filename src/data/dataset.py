@@ -292,14 +292,14 @@ class ControllableVideoDataset(Dataset):
                 tensor = torch.from_numpy(data).float()
 
                 if key == 'style_encoded':
-                    # BUG 3: style is a (1, 768) CLIP embedding -> store as (768,).
+                    # style is a (1, 768) CLIP embedding -> store as (768,).
                     tensor = tensor.reshape(-1)
                 elif tensor.dim() == 5 and tensor.shape[0] == 1:
                     tensor = tensor.squeeze(0)
 
                 controls[key] = tensor
 
-            # BUG 1: guarantee all 6 canonical modalities exist and emit per-modality
+            # guarantee all 6 canonical modalities exist and emit per-modality
             # validity flags. Missing spatial modalities are zero-filled and marked
             # invalid; the adapter masks them to exactly zero before gating.
             controls, valid = self._fill_and_validate(controls, encoded)
