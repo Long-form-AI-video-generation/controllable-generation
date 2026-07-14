@@ -37,17 +37,28 @@ class ControlEncoderProcessor:
         output_dir: str,
         device: str = 'cuda',
         num_frames: int = 8,
-        resolution: tuple = (256, 256)
+        resolution: tuple = (256, 256),
+        encoder_state_path: str = None,
+        seed: int = 42,
     ):
         self.control_base = Path(control_base_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.device = device
         self.num_frames = num_frames
         self.resolution = resolution
-        
-      
+
+        # The encoders are FROZEN RANDOM feature extractors. Their weights define the
+        # feature basis the ControlAdapter is trained against, so the SAME weights must be
+        # used to build the training set (stage 2) and at inference — otherwise the adapter
+        # sees an unrelated random projection and controlled generation collapses.
+        # `encoder_state_path` pins the weights to the dataset: created+saved on first run,
+        # loaded verbatim thereafter. `seed` is a reproducibility fallback when no path is
+        # given (still deterministic, but not immune to torch/CUDA RNG drift — prefer a path).
+        self.encoder_state_path = Path(encoder_state_path) if encoder_state_path else None
+        self.seed = seed
+
         self.encoders = self._init_encoders()
         
         
@@ -60,6 +71,12 @@ class ControlEncoderProcessor:
         print("Initializing Encoders")
         print("="*70)
         
+        # Seed BEFORE instantiation so a freshly-built basis is reproducible from `self.seed`
+        # even when no state file exists yet. Loading a saved state (below) overrides this.
+        torch.manual_seed(self.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.seed)
+
         encoders = {
             'depth': DepthEncoder(out_channels=256),
             'sketch': SketchEncoder(out_channels=256),
@@ -68,13 +85,32 @@ class ControlEncoderProcessor:
             'pose': PoseEncoder(out_channels=256),
             'mask': MaskEncoder(out_channels=256)
         }
-        
+
         for name, encoder in encoders.items():
             encoder = encoder.to(self.device).eval()
             encoders[name] = encoder
             param_count = sum(p.numel() for p in encoder.parameters()) / 1e6
             print(f"  ✓ {name:10s}: {param_count:6.2f}M params")
-        
+
+        # Pin the random basis to disk so stage-2 (dataset build) and inference share it.
+        if self.encoder_state_path is not None:
+            if self.encoder_state_path.exists():
+                state = torch.load(self.encoder_state_path, map_location=self.device)
+                for name, encoder in encoders.items():
+                    encoder.load_state_dict(state[name])
+                print(f"  Loaded pinned encoder weights from {self.encoder_state_path}")
+            else:
+                self.encoder_state_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(
+                    {name: enc.state_dict() for name, enc in encoders.items()},
+                    self.encoder_state_path,
+                )
+                print(f"  Saved encoder weights (seed={self.seed}) to {self.encoder_state_path}")
+        else:
+            print(f"  WARNING: no encoder_state_path given — using seed={self.seed} only. "
+                  f"Pass a path to pin weights to the dataset and guarantee "
+                  f"train/inference consistency across environments.")
+
         print("="*70 + "\n")
         return encoders
     
@@ -466,15 +502,25 @@ def main():
                        help='Number of frames to sample')
     parser.add_argument('--resolution', type=int, nargs=2, default=(256, 256),
                        help='Target resolution (W H)')
-    
+    parser.add_argument('--encoder_state', type=str, default=None,
+                       help='Path to encoder_state.pt. Created (from --seed) on first run '
+                            'and reused thereafter. Ship this file with the dataset and pass '
+                            'the SAME path to inference (test-allcontrols.py --encoder_state) '
+                            'so the adapter sees the identical frozen-random feature basis.')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Seed for the frozen random encoders (used when creating '
+                            '--encoder_state, or as a fallback if no path is given).')
+
     args = parser.parse_args()
-    
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}\n")
-    
+
     processor = ControlEncoderProcessor(
         control_base_dir=args.control_dir,
         output_dir=args.output_dir,
+        encoder_state_path=args.encoder_state,
+        seed=args.seed,
         device=device,
         num_frames=args.num_frames,
         resolution=tuple(args.resolution)

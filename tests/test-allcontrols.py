@@ -29,6 +29,7 @@ def extract_and_encode_all_controls(
     device: str,
     num_frames: int = 8,
     resolution: tuple = (256, 256),
+    encoder_state_path: str = None,
 ) -> dict:
    
     from src.data.extract_control import (
@@ -75,6 +76,7 @@ def extract_and_encode_all_controls(
                 device=device,
                 num_frames=num_frames,
                 resolution=resolution,
+                encoder_state_path=encoder_state_path,
             )
             processor.process_all()
 
@@ -315,6 +317,12 @@ def parse_args():
     p.add_argument('--prompt',      required=True)
     p.add_argument('--checkpoint',  required=True,
                    help='checkpoint_*.pt containing adapter + zero_convs')
+    p.add_argument('--encoder_state', default=None,
+                   help='Path to encoder_state.pt pinning the frozen random control '
+                        'encoders to the exact weights used to build the training set. '
+                        'REQUIRED for correct conditioning — without it, inference '
+                        're-inits the encoders to an unrelated random basis and the '
+                        'adapter (trained on the dataset basis) produces a collapsed video.')
     p.add_argument('--wan_dir',     default='Wan2.2/Wan2.2-TI2V-5B')
     p.add_argument('--output_dir',  default='results')
 
@@ -387,6 +395,7 @@ def main():
         device      = device,
         num_frames  = args.ctrl_num_frames,
         resolution  = ctrl_res,
+        encoder_state_path = args.encoder_state,
     )
 
     # Keep only user-selected modalities active; everything else is zero-filled AND
