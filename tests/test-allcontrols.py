@@ -18,15 +18,11 @@ sys.path.insert(0, str(project_root / 'Wan2.2'))
 import wan
 from wan.configs import WAN_CONFIGS, SIZE_CONFIGS, MAX_AREA_CONFIGS
 from src.models.wan_controllable import ControllableWAN
+from src.models.control_adapter import MODALITY_ORDER
 
-ALL_CONTROL_KEYS = [
-    'depth_encoded',
-    'mask_encoded',
-    'motion_encoded',
-    'pose_encoded',
-    'sketch_encoded',
-    'style_encoded',
-]
+# Derived from the canonical order so the positional valid_modalities decoding below
+# (valid_arr[i] for the i-th key) stays aligned with how encode_controls wrote it.
+ALL_CONTROL_KEYS = [f'{m}_encoded' for m in MODALITY_ORDER]
 
 def extract_and_encode_all_controls(
     video_path: str,
@@ -89,46 +85,68 @@ def extract_and_encode_all_controls(
             encoded = np.load(npz_files[0])
             controls = {
                 k: torch.from_numpy(encoded[k]).float().to(device)
-                for k in encoded.keys()
+                for k in encoded.keys() if k != 'valid_modalities'
             }
+            # BUG 1: authoritative per-modality validity, in sorted order.
+            valid_arr = encoded['valid_modalities'] if 'valid_modalities' in encoded else None
 
-    ref_shape = next(iter(controls.values())).shape  
-    for key in ALL_CONTROL_KEYS:
+    # style_encoded is now a (1, 768) CLIP embedding (BUG 3); spatial modalities are
+    # (1, 256, T, H, W). Derive the spatial zero-fill shape from a present spatial key.
+    spatial_shape = None
+    for k, v in controls.items():
+        if k != 'style_encoded' and v.dim() == 5:
+            spatial_shape = v.shape
+            break
+    if spatial_shape is None:
+        spatial_shape = (1, 256, num_frames, 128, 128)
+
+    valid = {}
+    for i, key in enumerate(ALL_CONTROL_KEYS):
         if key not in controls:
             print(f"  [ctrl] WARNING: '{key}' missing — padding with zeros")
-            controls[key] = torch.zeros(
-                ref_shape[0], 256, ref_shape[2], 128, 128,
-                device=device,
-            )
+            if key == 'style_encoded':
+                controls[key] = torch.zeros(1, 768, device=device)
+            else:
+                controls[key] = torch.zeros(*spatial_shape, device=device)
+            present = 0.0
+        elif valid_arr is not None:
+            present = float(valid_arr[i])
+        else:
+            present = float(controls[key].abs().sum() > 0)
+        valid[key] = torch.tensor(present, dtype=torch.float32, device=device)
 
     controls = {k: controls[k] for k in ALL_CONTROL_KEYS}
 
-    print(f"  [ctrl] Final control shapes:")
+    print(f"  [ctrl] Final control shapes / validity:")
     for k, v in controls.items():
-        print(f"    {k:20s}: {tuple(v.shape)}")
+        print(f"    {k:20s}: {tuple(v.shape)}  valid={valid[k].item():.0f}")
 
-    return controls
+    return controls, valid
 
 
 
-def activate_adapter(controllable_wan: ControllableWAN, control_features: dict):
-    
+def activate_adapter(controllable_wan: ControllableWAN, control_features: dict,
+                     valid_modalities: dict = None):
+
     with torch.no_grad():
-        ctrl = controllable_wan.control_adapter(control_features)
+        ctrl, style_tokens = controllable_wan.control_adapter(
+            control_features, valid_modalities
+        )
     controllable_wan._control_signal = ctrl
+    # BUG 3: the style hook on self.wan appends these to the cross-attention context.
+    controllable_wan._style_tokens = style_tokens
 
-    gates = torch.sigmoid(controllable_wan.control_adapter.modality_gates)
-    gate_str = "  ".join(
-        f"{k.replace('_encoded','')[:5]}={gates[i].item():.3f}"
-        for i, k in enumerate(sorted(ALL_CONTROL_KEYS))
-    )
-    print(f"  Adapter activated  |  ctrl norm={ctrl.norm():.4f}")
+    gates = controllable_wan.control_adapter.get_modality_weights()
+    gate_str = "  ".join(f"{k[:5]}={v:.3f}" for k, v in gates.items())
+    print(f"  Adapter activated  |  ctrl norm={ctrl.norm():.4f}  "
+          f"style norm={style_tokens.norm():.4f}")
     print(f"  Gates: {gate_str}")
 
 
 def deactivate_adapter(controllable_wan: ControllableWAN):
-    
+
     controllable_wan._control_signal = None
+    controllable_wan._style_tokens = None
 
 
 
@@ -364,23 +382,25 @@ def main():
 
     
     print("[1/5] Extracting & encoding all 6 control modalities...")
-    all_controls = extract_and_encode_all_controls(
+    all_controls, all_valid = extract_and_encode_all_controls(
         video_path  = args.ref_video,
         device      = device,
         num_frames  = args.ctrl_num_frames,
         resolution  = ctrl_res,
     )
 
-    
-    active_controls = {k: all_controls[k] for k in active_keys}
-  
+    # Keep only user-selected modalities active; everything else is zero-filled AND
+    # marked invalid so the adapter masks it to exactly zero (BUG 1). Each key keeps its
+    # own shape — spatial volumes vs the (1, 768) style embedding.
     adapter_controls = {}
+    adapter_valid = {}
     for k in ALL_CONTROL_KEYS:
-        if k in active_controls:
+        if k in active_keys:
             adapter_controls[k] = all_controls[k]
+            adapter_valid[k] = all_valid[k]
         else:
-            ref = next(iter(all_controls.values()))
-            adapter_controls[k] = torch.zeros_like(ref)
+            adapter_controls[k] = torch.zeros_like(all_controls[k])
+            adapter_valid[k] = torch.tensor(0.0, dtype=torch.float32, device=device)
 
     print("\n[2/5] Extracting depth for visualisation...")
     depth_seq = extract_depth_for_viz(
@@ -397,7 +417,17 @@ def main():
     ctrl_model.eval()
 
     ckpt = torch.load(args.checkpoint, map_location=device)
-    ctrl_model.control_adapter.load_state_dict(ckpt['model'])
+    try:
+        ctrl_model.control_adapter.load_state_dict(ckpt['model'])
+    except RuntimeError as e:
+        # Pre-style-refactor checkpoints (6 gated modalities incl. style in fusion, no
+        # style_proj/style_zero) are architecturally incompatible. Fail with a clear
+        # message instead of a raw size-mismatch traceback.
+        raise SystemExit(
+            "ERROR: checkpoint is incompatible with the current adapter architecture "
+            "(BUG 3: style moved to a cross-attention pathway, 6->5 gated modalities). "
+            "Retrain with the updated trainer.\n  Details: " + str(e)[:160]
+        )
     if 'zero_convs' in ckpt:
         ctrl_model.zero_convs.load_state_dict(ckpt['zero_convs'])
         print("  Loaded adapter + zero_convs")
@@ -456,7 +486,7 @@ def main():
           f"({len(active_keys)} controls: "
           f"{', '.join(k.replace('_encoded','') for k in active_keys)})")
     print("-"*60)
-    activate_adapter(ctrl_model, adapter_controls)
+    activate_adapter(ctrl_model, adapter_controls, adapter_valid)
     set_seed()
     with torch.no_grad():
         video_ctrl = wan_pipeline.generate(args.prompt, **gen_kwargs)

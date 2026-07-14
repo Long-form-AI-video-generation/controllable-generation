@@ -71,12 +71,17 @@ class ControllableWAN(nn.Module):
         dit_dim = self.wan.config.dim 
 
         print("  [4/5] Creating ControlAdapter...")
+        # Style tokens are appended to WAN's text cross-attention context, so they must
+        # match the T5 context dim (BUG 3). Derive it from the WAN config when available.
+        text_dim = getattr(self.wan.config, 'text_dim', 4096)
         self.control_adapter = ControlAdapter(
             control_dim=256,
             hidden_dim=1024,
             dit_dim=dit_dim,
             num_controls=6,
             use_gradient_checkpointing=True,
+            style_dim=768,
+            text_dim=text_dim,
         ).to(device)
 
         print("  [5/5] Creating zero-conv projections (one per injection layer)...")
@@ -91,6 +96,9 @@ class ControllableWAN(nn.Module):
 
       
         self._control_signal: torch.Tensor | None = None
+        # BUG 3: style cross-attention tokens, injected into WAN's context by a
+        # forward-pre-hook on self.wan (set during forward / activate_adapter).
+        self._style_tokens: torch.Tensor | None = None
 
         
         total     = sum(p.numel() for p in self.parameters())
@@ -108,7 +116,7 @@ class ControllableWAN(nn.Module):
         print(f"{'='*70}\n")
 
     def _setup_control_hooks(self):
-        
+
         self.hooks = []
         for hook_idx, layer_idx in enumerate(self.control_injection_layers):
             if layer_idx >= len(self.wan.blocks):
@@ -117,6 +125,52 @@ class ControllableWAN(nn.Module):
             self._block_to_hook_idx[id(block)] = hook_idx
             hook = block.register_forward_pre_hook(self._control_injection_hook)
             self.hooks.append(hook)
+
+        # BUG 3: top-level hook that appends style tokens to the cross-attention context.
+        # Registered once on the WAN DiT so both training (this module's forward) and
+        # inference (WAN pipeline calling self.wan directly) share one injection path.
+        self.hooks.append(
+            self.wan.register_forward_pre_hook(self._style_injection_hook, with_kwargs=True)
+        )
+
+    def _style_injection_hook(self, module, args, kwargs):
+        """Append style tokens to WAN's text context. Fails safe (no-op) if the context
+        layout doesn't match what we expect — style is zero at init and a secondary
+        control, so skipping injection never corrupts the base / spatial-control output.
+
+        NOTE: this assumes WAN's forward takes `context` as a list of per-sample
+        (L, text_dim) tensors (positional index 2 or kwarg 'context'). Verify against the
+        installed Wan2.2 source — in particular that appending tokens does not exceed
+        WAN's internal `text_len` padding cap.
+        """
+        style = self._style_tokens
+        if style is None:
+            return None
+
+        n_style = style.shape[1]
+        # WAN re-pads each context to a fixed `text_len`; appending past it would overflow.
+        # If present, trim trailing (padding) tokens so total length stays within the cap.
+        text_len = getattr(module, 'text_len', None)
+
+        def _inject(context):
+            if not isinstance(context, (list, tuple)) or len(context) != style.shape[0]:
+                return context  # unexpected layout (e.g. CFG-doubled batch) -> skip
+            out = []
+            for i, c in enumerate(context):
+                if text_len is not None and c.shape[0] + n_style > text_len:
+                    c = c[: max(text_len - n_style, 0)]
+                out.append(torch.cat([c, style[i].to(c.device, c.dtype)], dim=0))
+            return out
+
+        if 'context' in kwargs:
+            new_kwargs = dict(kwargs)
+            new_kwargs['context'] = _inject(kwargs['context'])
+            return args, new_kwargs
+        if len(args) >= 3:
+            new_args = list(args)
+            new_args[2] = _inject(args[2])
+            return tuple(new_args), kwargs
+        return None
 
     def _control_injection_hook(self, module, input):
         if self._control_signal is None:
@@ -296,20 +350,29 @@ class ControllableWAN(nn.Module):
         timesteps: torch.Tensor,
         prompts: list,
         control_features: dict = None,
+        valid_modalities: dict = None,
     ) -> torch.Tensor:
 
         offload_model = True
 
+        # style_tokens are appended to the text cross-attention context below (BUG 3);
+        # None for the base / no-control run so the context is left untouched.
+        style_tokens = None
 
         if control_features is not None:
             t0 = time.time()
             controls_device = {k: v.to(self.device) for k, v in control_features.items()}
+            valid_device = None
+            if valid_modalities is not None:
+                valid_device = {k: v.to(self.device) for k, v in valid_modalities.items()}
             # controls_device = control_features
             print(f"  Control move:    {time.time() - t0:.1f}s")
 
             t0 = time.time()
-           
-            self._control_signal = self.control_adapter(controls_device)
+
+            self._control_signal, style_tokens = self.control_adapter(
+                controls_device, valid_device
+            )
             del controls_device
             torch.cuda.empty_cache()
 
@@ -344,6 +407,11 @@ class ControllableWAN(nn.Module):
         
         context = text_embeddings
 
+        # BUG 3: stash style tokens; the forward-pre-hook on self.wan appends them to the
+        # cross-attention context. Doing it in the hook (not here) means inference — which
+        # calls self.wan via the WAN pipeline, not this forward — gets style injection too.
+        self._style_tokens = style_tokens
+
         x = [latent[i] for i in range(latent.shape[0])]
         
 
@@ -367,7 +435,8 @@ class ControllableWAN(nn.Module):
         print(f"  WAN forward:     {time.time() - t0:.1f}s")
 
         noise_pred = torch.stack(list(noise_pred))
-        self._control_signal = None   
+        self._control_signal = None
+        self._style_tokens = None
 
         
         
@@ -414,14 +483,14 @@ def test_controllable_wan():
         'depth_encoded':  torch.randn(B, 256, 8, 128, 128).cuda(),
         'sketch_encoded': torch.randn(B, 256, 8, 128, 128).cuda(),
         'motion_encoded': torch.randn(B, 256, 8, 128, 128).cuda(),
-        'style_encoded':  torch.randn(B, 256, 8,  32,  32).cuda(),
+        'style_encoded':  torch.randn(B, 768).cuda(),  # BUG 3: raw CLIP embedding
         'pose_encoded':   torch.randn(B, 256, 8, 128, 128).cuda(),
         'mask_encoded':   torch.randn(B, 256, 8, 128, 128).cuda(),
     }
 
-  
+
     print("\nVerifying zero-conv guarantee...")
-    ctrl_signal = model.control_adapter(
+    ctrl_signal, _style_tokens = model.control_adapter(
         {k: v.to(model.device) for k, v in controls.items()}
     )
     for i, zc in enumerate(model.zero_convs):
