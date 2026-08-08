@@ -3,6 +3,7 @@ import unittest
 import cv2
 import numpy as np
 
+from src.data.frame_sampling import resolve_frame_interval
 from src.sketch_models.preprocessing import (
     CannyConfig,
     extract_canny,
@@ -37,6 +38,17 @@ class SketchPreprocessingTests(unittest.TestCase):
         second = select_frame_indices(3, 6, 5)
         np.testing.assert_array_equal(first, [3, 4, 5, 5, 5])
         np.testing.assert_array_equal(first, second)
+
+    def test_metadata_interval_is_clamped_to_actual_video_length(self):
+        self.assertEqual(resolve_frame_interval(0, 192, 128), (0, 128))
+        np.testing.assert_array_equal(
+            select_frame_indices(*resolve_frame_interval(0, 192, 128), 8),
+            [0, 18, 36, 54, 72, 90, 108, 127],
+        )
+
+    def test_interval_rejects_start_beyond_actual_video(self):
+        with self.assertRaisesRegex(ValueError, "outside a video"):
+            resolve_frame_interval(128, 192, 128)
 
     def test_rgb_and_bgr_are_explicitly_equivalent(self):
         rgb = np.zeros((40, 40, 3), dtype=np.uint8)

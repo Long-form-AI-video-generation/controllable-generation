@@ -10,7 +10,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.data.frame_sampling import select_frame_indices
+from src.data.frame_sampling import (
+    resolve_frame_interval,
+    select_frame_indices,
+)
 from src.sketch_models.preprocessing import (
     CannyConfig,
     prepare_canny_sequence,
@@ -27,6 +30,19 @@ def _read_selected_frames(
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise RuntimeError(f"Could not open {video_path}")
+
+    actual_frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    try:
+        start_frame, end_frame = resolve_frame_interval(
+            start_frame,
+            end_frame,
+            actual_frame_count,
+        )
+    except ValueError as error:
+        capture.release()
+        raise RuntimeError(
+            f"Invalid frame range for {video_path}: {error}"
+        ) from error
 
     frames = []
     try:

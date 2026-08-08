@@ -5,6 +5,28 @@ from __future__ import annotations
 import numpy as np
 
 
+def resolve_frame_interval(
+    start_frame: int,
+    end_frame: int,
+    actual_frame_count: int,
+) -> tuple[int, int]:
+    """Clamp a metadata interval to the frames present in the video."""
+
+    if actual_frame_count <= 0:
+        raise ValueError("actual_frame_count must be positive")
+    if start_frame < 0:
+        raise ValueError("start_frame must be non-negative")
+    if end_frame <= start_frame:
+        raise ValueError("end_frame must be greater than start_frame")
+    if start_frame >= actual_frame_count:
+        raise ValueError(
+            f"start_frame {start_frame} is outside a video with "
+            f"{actual_frame_count} frames"
+        )
+
+    return start_frame, min(end_frame, actual_frame_count)
+
+
 def select_frame_indices(
     start_frame: int,
     end_frame: int,

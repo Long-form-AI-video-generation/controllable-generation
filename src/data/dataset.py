@@ -9,9 +9,15 @@ import cv2
 from typing import Dict
 
 try:
-    from data.frame_sampling import select_frame_indices
+    from data.frame_sampling import (
+        resolve_frame_interval,
+        select_frame_indices,
+    )
 except ImportError:  # Support package imports from the repository root.
-    from src.data.frame_sampling import select_frame_indices
+    from src.data.frame_sampling import (
+        resolve_frame_interval,
+        select_frame_indices,
+    )
 
 
 
@@ -261,13 +267,18 @@ class ControllableVideoDataset(Dataset):
                 raise RuntimeError(f"Could not open video: {video_path}")
             return self._empty_video_frames()
         
-        total_frames = end_frame - start_frame
-        
-        if total_frames <= 0:
+        actual_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        try:
+            start_frame, end_frame = resolve_frame_interval(
+                start_frame,
+                end_frame,
+                actual_frame_count,
+            )
+        except ValueError as error:
             cap.release()
             if self.strict:
                 raise ValueError(
-                    f"Invalid frame range [{start_frame}, {end_frame})"
+                    f"Invalid frame range for {video_path}: {error}"
                 )
             return self._empty_video_frames()
 
