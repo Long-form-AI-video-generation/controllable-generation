@@ -8,6 +8,11 @@ import json
 import cv2
 from typing import Dict
 
+try:
+    from data.frame_sampling import select_frame_indices
+except ImportError:  # Support package imports from the repository root.
+    from src.data.frame_sampling import select_frame_indices
+
 
 
 class ControllableVideoDataset(Dataset):
@@ -21,7 +26,10 @@ class ControllableVideoDataset(Dataset):
         resolution: tuple = (128, 128),
         split: str = 'train',
         text_encoder=None,
-        load_videos: bool = True
+        load_videos: bool = True,
+        control_key: str = 'depth_encoded',
+        strict: bool = False,
+        split_manifest_path: str = None,
     ):
         """
         Args:
@@ -32,6 +40,9 @@ class ControllableVideoDataset(Dataset):
             resolution: Target resolution (W, H)
             split: 'train' (60%), 'val' (20%), or 'test' (20%)
             load_videos: If False, return dummy frames (for testing)
+            control_key: The single control tensor returned for each sample
+            strict: Raise data errors instead of returning legacy dummy samples
+            split_manifest_path: Optional frozen train/val/test video-ID manifest
         """
         self.encoded_dir = Path(encoded_controls_dir)
         self.videos_dir = Path(videos_dir)
@@ -39,6 +50,14 @@ class ControllableVideoDataset(Dataset):
         self.resolution = resolution
         self.split = split
         self.load_videos = load_videos
+        self.control_key = control_key
+        self.strict = strict
+        self.split_manifest_path = (
+            Path(split_manifest_path) if split_manifest_path else None
+        )
+
+        if not self.control_key:
+            raise ValueError("control_key must not be empty")
         
         print(f"\n{'='*70}")
         print(f"Loading mutlt-Video Dataset - {split.upper()} split")
@@ -55,18 +74,24 @@ class ControllableVideoDataset(Dataset):
         all_annotations = sorted(all_annotations, key=lambda x: x['shot_id'])
         
         
-        num_shots = len(all_annotations)
-        train_end = int(num_shots * 0.6)
-        val_end = int(num_shots * 0.8)
-        
-        if split == 'train':
-            split_annotations = all_annotations[:train_end]
-        elif split == 'val':
-            split_annotations = all_annotations[train_end:val_end]
-        elif split == 'test':
-            split_annotations = all_annotations[val_end:]
-        else:
+        if split not in {'train', 'val', 'test'}:
             raise ValueError(f"Invalid split: {split}")
+
+        if self.split_manifest_path is not None:
+            split_annotations = self._select_manifest_annotations(
+                all_annotations,
+                split,
+            )
+        else:
+            num_shots = len(all_annotations)
+            train_end = int(num_shots * 0.6)
+            val_end = int(num_shots * 0.8)
+            if split == 'train':
+                split_annotations = all_annotations[:train_end]
+            elif split == 'val':
+                split_annotations = all_annotations[train_end:val_end]
+            else:
+                split_annotations = all_annotations[val_end:]
         
         print(f"  {split.capitalize()} shots: {len(split_annotations)}")
         
@@ -85,7 +110,7 @@ class ControllableVideoDataset(Dataset):
         print("  Finding encoded files...")
         self.samples = []
         
-        for enc_file in self.encoded_dir.rglob('*_encoded.npz'):
+        for enc_file in sorted(self.encoded_dir.rglob('*_encoded.npz')):
           
             rel_path = enc_file.relative_to(self.encoded_dir)
             video_id = rel_path.parent.name
@@ -154,14 +179,58 @@ class ControllableVideoDataset(Dataset):
            
             for s in self.samples:
                 self.text_cache[s['caption']] = s['caption']
+
+    def _select_manifest_annotations(self, all_annotations, split):
+        with open(self.split_manifest_path) as manifest_file:
+            manifest = json.load(manifest_file)
+
+        required = {'train', 'val', 'test'}
+        if not required.issubset(manifest):
+            raise ValueError(
+                f"split manifest must contain {sorted(required)}"
+            )
+
+        split_sets = {
+            name: {str(video_id) for video_id in manifest[name]}
+            for name in required
+        }
+        if (
+            split_sets['train'] & split_sets['val']
+            or split_sets['train'] & split_sets['test']
+            or split_sets['val'] & split_sets['test']
+        ):
+            raise ValueError("split manifest contains overlapping video IDs")
+
+        target_ids = split_sets[split]
+        selected = [
+            annotation
+            for annotation in all_annotations
+            if str(annotation['video_id']) in target_ids
+        ]
+        found_ids = {str(annotation['video_id']) for annotation in selected}
+        missing = target_ids - found_ids
+        if missing:
+            preview = sorted(missing)[:10]
+            raise ValueError(
+                f"split manifest references missing video IDs: {preview}"
+            )
+        return selected
     
     def __len__(self):
         return len(self.samples)
+
+    def _empty_video_frames(self) -> torch.Tensor:
+        return torch.zeros(
+            self.num_frames,
+            3,
+            self.resolution[1],
+            self.resolution[0],
+        )
     
     def _load_video_frames(self, video_id: str, start_frame: int, end_frame: int) -> torch.Tensor:
         """Load video frames"""
         if not self.load_videos:
-            return torch.zeros(self.num_frames, 3, *self.resolution)
+            return self._empty_video_frames()
         
         
         video_paths = [
@@ -177,27 +246,36 @@ class ControllableVideoDataset(Dataset):
                 break
         
         if video_path is None:
+            if self.strict:
+                raise FileNotFoundError(
+                    f"Video not found for {video_id}; tried {video_paths}"
+                )
             print(f"⚠️  Video not found for {video_id}")
             print(f"   Tried: {[str(p) for p in video_paths]}")
-            return torch.zeros(self.num_frames, 3, *self.resolution)
+            return self._empty_video_frames()
         
         cap = cv2.VideoCapture(str(video_path))
         
         if not cap.isOpened():
-            return torch.zeros(self.num_frames, 3, *self.resolution)
+            if self.strict:
+                raise RuntimeError(f"Could not open video: {video_path}")
+            return self._empty_video_frames()
         
         total_frames = end_frame - start_frame
         
         if total_frames <= 0:
             cap.release()
-            return torch.zeros(self.num_frames, 3, *self.resolution)
-        
-        if total_frames <= self.num_frames:
-            frame_indices = list(range(start_frame, end_frame))
-            while len(frame_indices) < self.num_frames:
-                frame_indices.append(frame_indices[-1])
-        else:
-            frame_indices = np.linspace(start_frame, end_frame - 1, self.num_frames, dtype=int)
+            if self.strict:
+                raise ValueError(
+                    f"Invalid frame range [{start_frame}, {end_frame})"
+                )
+            return self._empty_video_frames()
+
+        frame_indices = select_frame_indices(
+            start_frame,
+            end_frame,
+            self.num_frames,
+        )
         
         frames = []
         for frame_idx in frame_indices:
@@ -205,6 +283,11 @@ class ControllableVideoDataset(Dataset):
             ret, frame = cap.read()
             
             if not ret:
+                if self.strict:
+                    cap.release()
+                    raise RuntimeError(
+                        f"Could not decode frame {frame_idx} from {video_path}"
+                    )
                 if len(frames) > 0:
                     frames.append(frames[-1].copy())
                 else:
@@ -223,57 +306,106 @@ class ControllableVideoDataset(Dataset):
     
     
 
+    def _load_control(self, encoded_path: Path) -> torch.Tensor:
+        with np.load(encoded_path, allow_pickle=False) as encoded:
+            if self.control_key not in encoded:
+                raise KeyError(
+                    f"{encoded_path} does not contain {self.control_key!r}"
+                )
+            data = np.asarray(encoded[self.control_key])
+
+        tensor = torch.from_numpy(data).half()
+        if tensor.dim() == 5 and tensor.shape[0] == 1:
+            tensor = tensor.squeeze(0)
+        if tensor.dim() != 4:
+            raise ValueError(
+                f"{encoded_path}: expected [C,T,H,W], "
+                f"got {tuple(tensor.shape)}"
+            )
+        if (
+            tensor.shape[1] != self.num_frames
+            and (self.strict or self.control_key == 'sketch_encoded')
+        ):
+            raise ValueError(
+                f"{encoded_path}: expected {self.num_frames} control frames, "
+                f"got {tensor.shape[1]}"
+            )
+        if not torch.isfinite(tensor).all():
+            raise ValueError(f"{encoded_path}: control contains NaN or Inf")
+
+        if self.control_key == 'sketch_encoded':
+            if tensor.shape[0] != 1:
+                raise ValueError(
+                    f"{encoded_path}: sketch must have one channel, "
+                    f"got {tensor.shape[0]}"
+                )
+            expected_spatial = (self.resolution[1], self.resolution[0])
+            if tensor.shape[-2:] != expected_spatial:
+                raise ValueError(
+                    f"{encoded_path}: sketch spatial shape must be "
+                    f"{expected_spatial}, got {tuple(tensor.shape[-2:])}"
+                )
+            low = float(tensor.min())
+            high = float(tensor.max())
+            if low < 0.0 or high > 1.0:
+                raise ValueError(
+                    f"{encoded_path}: sketch range must be [0,1], "
+                    f"got [{low}, {high}]"
+                )
+
+        return tensor
+
     def __getitem__(self, idx) -> Dict[str, torch.Tensor]:
         sample = self.samples[idx]
-        
+
         try:
-            # Load encoded controls
-            encoded = np.load(sample['encoded_path'])
-            
-            controls = {}
-            for key in encoded.keys():
-                data = encoded[key]
-                tensor = torch.from_numpy(data).half()
-                
-                if tensor.dim() == 5 and tensor.shape[0] == 1:
-                    tensor = tensor.squeeze(0)
-                
-                controls[key] = tensor
-            controls = {k: v for k, v in controls.items() if k == 'depth_encoded'}
-            # Load video frames
+            controls = {
+                self.control_key: self._load_control(sample['encoded_path'])
+            }
             frames = self._load_video_frames(
                 sample['video_id'],
                 sample['start_frame'],
-                sample['end_frame']
+                sample['end_frame'],
             )
-            
-            
-            video = frames.permute(1, 0, 2, 3)  # [T, C, H, W] -> [C, T, H, W]
-            
+            video = frames.permute(1, 0, 2, 3)
+
             return {
                 'controls': controls,
-                'video': video,  
-                # 'caption': sample['caption'],
-                'caption': self.text_cache[sample['caption']], 
+                'video': video,
+                'caption': self.text_cache[sample['caption']],
                 'video_id': sample['video_id'],
-                'shot_id': sample['shot_id']
+                'shot_id': sample['shot_id'],
             }
-        
-        except Exception as e:
-            print(f"⚠️  Error loading sample {idx}: {e}")
+
+        except Exception as error:
+            if self.strict:
+                raise RuntimeError(
+                    f"Failed to load sample {idx} "
+                    f"({sample['video_id']}/{sample['shot_id']}): {error}"
+                ) from error
+
+            print(f"Warning: error loading sample {idx}: {error}")
+            control_channels = (
+                1 if self.control_key == 'sketch_encoded' else 256
+            )
             return {
                 'controls': {
-                    'depth_encoded': torch.zeros(256, 8, 128, 128),
-                    # 'sketch_encoded': torch.zeros(256, 8, 128, 128),
-                    # 'motion_encoded': torch.zeros(256, 8, 128, 128),
-                    # 'style_encoded': torch.zeros(256, 8, 32, 32),
-                    # 'pose_encoded': torch.zeros(256, 8, 128, 128),
-                    # 'mask_encoded': torch.zeros(256, 8, 128, 128),
+                    self.control_key: torch.zeros(
+                        control_channels,
+                        self.num_frames,
+                        self.resolution[1],
+                        self.resolution[0],
+                    ),
                 },
-                'video': torch.zeros(3, self.num_frames, *self.resolution),
+                'video': torch.zeros(
+                    3,
+                    self.num_frames,
+                    self.resolution[1],
+                    self.resolution[0],
+                ),
                 'caption': "error loading sample",
                 'video_id': 'error',
-                'shot_id': 'error'
+                'shot_id': 'error',
             }
 def test_dataset():
     """Test dataset loading"""
