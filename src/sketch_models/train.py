@@ -37,7 +37,7 @@ def _captions_to_device(captions, device: str):
 
 
 class SketchTrainer(MultiVideoTrainer):
-    """Experiment-B trainer specialized for one-channel Canny control."""
+    """Trainer specialized for one-channel Canny control."""
 
     def _loss_step(self, batch, *, training: bool) -> tuple[torch.Tensor, dict]:
         video = batch["video"].to(self.device)

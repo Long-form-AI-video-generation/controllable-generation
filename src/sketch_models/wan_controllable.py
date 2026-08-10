@@ -1,4 +1,4 @@
-"""Sketch-specific one-control WAN wrapper built on the merged depth wrapper."""
+"""WAN wrapper for Canny-conditioned video generation."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from .injection import (
 
 
 class ControllableWAN(DepthControllableWAN):
-    """WAN 2.2 with one checkpointed Canny condition path."""
+    """WAN 2.2 with a checkpointed Canny condition path."""
 
     def __init__(
         self,

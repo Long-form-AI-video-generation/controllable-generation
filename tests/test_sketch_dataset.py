@@ -88,7 +88,7 @@ class SketchDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "one channel"):
             self._dataset()[0]
 
-    def test_legacy_depth_default_remains_available(self):
+    def test_depth_control_key_remains_available(self):
         depth = np.zeros((1, 256, 2, 8, 8), dtype=np.float16)
         np.savez(self.control_path, depth_encoded=depth)
 

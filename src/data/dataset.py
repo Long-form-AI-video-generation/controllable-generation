@@ -47,7 +47,7 @@ class ControllableVideoDataset(Dataset):
             split: 'train' (60%), 'val' (20%), or 'test' (20%)
             load_videos: If False, return dummy frames (for testing)
             control_key: The single control tensor returned for each sample
-            strict: Raise data errors instead of returning legacy dummy samples
+            strict: Raise data errors instead of returning fallback samples
             split_manifest_path: Optional frozen train/val/test video-ID manifest
         """
         self.encoded_dir = Path(encoded_controls_dir)

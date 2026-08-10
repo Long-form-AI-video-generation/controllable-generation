@@ -19,7 +19,7 @@ PREPROCESSING_VERSION = "canny-v1"
 
 @dataclass(frozen=True)
 class CannyConfig:
-    """Complete preprocessing contract for the first sketch-control model."""
+    """Complete preprocessing contract for Canny control."""
 
     low_threshold: int = 100
     high_threshold: int = 200

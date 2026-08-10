@@ -1,4 +1,4 @@
-"""One-control adapter for Canny edge conditioning."""
+"""Adapter for Canny edge conditioning."""
 
 from __future__ import annotations
 

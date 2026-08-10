@@ -78,7 +78,7 @@ def normalize_control_residual(
     ratio_cap: float = 0.1,
     control_strength: float = 1.0,
 ) -> torch.Tensor:
-    """Apply the validated one-control norm cap and inference strength."""
+    """Apply the residual norm cap and inference strength."""
 
     if hidden_states.shape != residual.shape:
         raise ValueError(
