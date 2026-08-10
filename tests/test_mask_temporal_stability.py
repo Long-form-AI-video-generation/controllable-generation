@@ -1,0 +1,70 @@
+import unittest
+
+import numpy as np
+
+from src.mask_models.semantic_groups import (
+    SemanticGroup,
+    apply_group_lookup,
+    build_group_lookup,
+    group_for_label,
+)
+from src.mask_models.temporal_stability import (
+    adjacent_agreement,
+    summarize_stability,
+)
+
+
+class SemanticGroupTests(unittest.TestCase):
+    def test_known_and_unknown_labels(self):
+        self.assertEqual(group_for_label("person"), SemanticGroup.PERSON)
+        self.assertEqual(group_for_label("car"), SemanticGroup.VEHICLE)
+        self.assertEqual(group_for_label("wall"), SemanticGroup.STRUCTURE)
+        self.assertEqual(group_for_label("chair"), SemanticGroup.OBJECT)
+
+    def test_lookup_accepts_transformers_string_keys(self):
+        lookup = build_group_lookup({"0": "wall", "1": "building"})
+        labels = np.asarray([[0, 1]], dtype=np.int64)
+        grouped = apply_group_lookup(labels, lookup)
+        np.testing.assert_array_equal(
+            grouped,
+            np.asarray([[SemanticGroup.STRUCTURE] * 2], dtype=np.uint8),
+        )
+
+    def test_lookup_rejects_missing_ids(self):
+        with self.assertRaises(ValueError):
+            build_group_lookup({0: "wall", 2: "person"})
+
+
+class TemporalStabilityTests(unittest.TestCase):
+    def test_adjacent_agreement(self):
+        maps = np.asarray(
+            [
+                [[0, 0], [1, 1]],
+                [[0, 1], [1, 1]],
+                [[1, 1], [1, 1]],
+            ]
+        )
+        np.testing.assert_allclose(adjacent_agreement(maps), [0.75, 0.75])
+
+    def test_grouping_can_remove_within_group_flicker(self):
+        raw = np.asarray(
+            [
+                [[0, 0], [1, 1]],
+                [[1, 1], [0, 0]],
+            ],
+            dtype=np.int64,
+        )
+        lookup = build_group_lookup({0: "wall", 1: "building"})
+        grouped = apply_group_lookup(raw, lookup)
+        report = summarize_stability(raw, grouped)
+        self.assertEqual(report["raw"]["mean_adjacent_agreement"], 0.0)
+        self.assertEqual(report["coarse"]["mean_adjacent_agreement"], 1.0)
+        self.assertEqual(report["coarse_agreement_improvement"], 1.0)
+
+    def test_shape_mismatch_is_rejected(self):
+        with self.assertRaises(ValueError):
+            summarize_stability(np.zeros((2, 2, 2)), np.zeros((2, 2, 3)))
+
+
+if __name__ == "__main__":
+    unittest.main()
