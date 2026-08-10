@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 
 from src.mask_models.inference_config import (
     strength_tag,
@@ -29,4 +29,3 @@ class MaskInferenceConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

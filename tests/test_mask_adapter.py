@@ -1,4 +1,4 @@
-﻿import io
+import io
 import unittest
 
 try:
@@ -121,4 +121,3 @@ class MaskControlAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

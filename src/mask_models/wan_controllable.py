@@ -1,4 +1,4 @@
-﻿"""WAN wrapper for semantic mask-conditioned video generation."""
+"""WAN wrapper for semantic mask-conditioned video generation."""
 
 from __future__ import annotations
 
@@ -113,4 +113,3 @@ class ControllableWAN(DepthControllableWAN):
             "cfg_control_policy": self.cfg_control_policy,
             "control_ratio_cap": self.control_ratio_cap,
         }
-

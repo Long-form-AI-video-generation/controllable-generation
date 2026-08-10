@@ -1,2 +1,1 @@
 """Semantic-mask control utilities."""
-

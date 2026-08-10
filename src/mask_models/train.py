@@ -1,4 +1,4 @@
-﻿"""Train the mask-only WAN control adapter.
+"""Train the mask-only WAN control adapter.
 
 This entry point deliberately has no machine-specific paths. All data, WAN, and
 checkpoint locations are supplied on the command line by the execution host.
@@ -550,4 +550,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

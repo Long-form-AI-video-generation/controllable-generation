@@ -1,4 +1,4 @@
-﻿"""Pure control-token alignment and residual helpers."""
+"""Pure control-token alignment and residual helpers."""
 
 from __future__ import annotations
 
@@ -149,4 +149,3 @@ def build_padded_control_residual(
         projected.shape[2],
     )
     return torch.cat([projected, padding], dim=1)
-

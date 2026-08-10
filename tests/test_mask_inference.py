@@ -1,4 +1,4 @@
-﻿"""Run matched-seed base and mask-controlled WAN inference."""
+"""Run matched-seed base and mask-controlled WAN inference."""
 
 from __future__ import annotations
 
@@ -323,4 +323,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

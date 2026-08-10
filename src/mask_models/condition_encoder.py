@@ -1,4 +1,4 @@
-﻿"""Trainable spatio-temporal encoder for sparse semantic mask edge sequences."""
+"""Trainable spatio-temporal encoder for sparse semantic mask edge sequences."""
 
 from __future__ import annotations
 
@@ -160,4 +160,3 @@ class MaskConditionEncoder(nn.Module):
                 use_reentrant=False,
             )
         return self._encode(control)
-

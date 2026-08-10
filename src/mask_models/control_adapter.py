@@ -1,4 +1,4 @@
-﻿"""Adapter for semantic mask edge conditioning."""
+"""Adapter for semantic mask edge conditioning."""
 
 from __future__ import annotations
 
@@ -92,4 +92,3 @@ class MaskControlAdapter(nn.Module):
         return {
             "mask": float(torch.sigmoid(self.modality_gate).detach().cpu())
         }
-

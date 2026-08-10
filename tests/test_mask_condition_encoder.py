@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 
 try:
     import torch
@@ -60,4 +60,3 @@ class MaskConditionEncoderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,4 +1,4 @@
-﻿"""WAN-independent mask inference configuration helpers."""
+"""WAN-independent mask inference configuration helpers."""
 
 from __future__ import annotations
 
@@ -21,4 +21,3 @@ def validate_inference_settings(
 
 def strength_tag(strength: float) -> str:
     return f"{float(strength):g}".replace(".", "p")
-

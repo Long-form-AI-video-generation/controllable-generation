@@ -1,4 +1,4 @@
-﻿"""Pure helpers for the mask training schedule."""
+"""Pure helpers for the mask training schedule."""
 
 from __future__ import annotations
 
@@ -27,4 +27,3 @@ def expected_optimizer_steps(
         num_batches,
         gradient_accumulation_steps,
     ) * epochs
-

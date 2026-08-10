@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 
 from src.mask_models.training_schedule import (
     expected_optimizer_steps,
@@ -20,4 +20,3 @@ class MaskTrainingScheduleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

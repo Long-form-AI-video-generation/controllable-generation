@@ -1,4 +1,4 @@
-﻿"""Small RGB video I/O helpers for mask inference diagnostics."""
+"""Small RGB video I/O helpers for mask inference diagnostics."""
 
 from __future__ import annotations
 
@@ -99,4 +99,3 @@ def save_debug_frames(
         Image.fromarray(frames[index]).save(
             output_dir / f"{prefix}_frame_{index:03d}.png"
         )
-
