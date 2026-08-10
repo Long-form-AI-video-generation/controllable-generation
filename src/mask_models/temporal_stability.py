@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
+
+from .semantic_groups import SemanticGroup
 
 
 def adjacent_agreement(label_maps: np.ndarray) -> np.ndarray:
@@ -22,6 +24,77 @@ def dominant_fraction(label_map: np.ndarray) -> float:
     if values.ndim != 2 or values.size == 0:
         raise ValueError("Expected a nonempty [H,W] label map")
     return float(np.bincount(values.reshape(-1)).max() / values.size)
+
+
+def summarize_frame_composition(
+    raw_map: np.ndarray,
+    grouped_map: np.ndarray,
+    id2label: Mapping[int | str, str],
+    *,
+    top_k: int = 8,
+    collapse_threshold: float = 0.9,
+) -> dict[str, Any]:
+    """Explain which raw classes produced each coarse frame region."""
+    raw = np.asarray(raw_map)
+    grouped = np.asarray(grouped_map)
+    if raw.shape != grouped.shape or raw.ndim != 2:
+        raise ValueError(
+            f"Expected matching [H,W] maps, got {raw.shape} and {grouped.shape}"
+        )
+    if raw.size == 0:
+        raise ValueError("label maps must not be empty")
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if not 0.0 < collapse_threshold <= 1.0:
+        raise ValueError("collapse_threshold must be in (0, 1]")
+
+    labels = {int(key): str(value) for key, value in id2label.items()}
+    raw_ids, raw_counts = np.unique(raw, return_counts=True)
+    order = np.argsort(raw_counts)[::-1]
+    top_raw = []
+    for position in order[:top_k]:
+        class_id = int(raw_ids[position])
+        if class_id not in labels:
+            raise KeyError(f"Missing class name for ID {class_id}")
+        group_values = grouped[raw == class_id]
+        group_id = int(np.bincount(group_values.reshape(-1)).argmax())
+        top_raw.append({
+            "class_id": class_id,
+            "class_name": labels[class_id],
+            "fraction": float(raw_counts[position] / raw.size),
+            "coarse_group_id": group_id,
+            "coarse_group_name": SemanticGroup(group_id).name.lower(),
+        })
+
+    group_ids, group_counts = np.unique(grouped, return_counts=True)
+    groups = [
+        {
+            "group_id": int(group_id),
+            "group_name": SemanticGroup(int(group_id)).name.lower(),
+            "fraction": float(count / grouped.size),
+        }
+        for group_id, count in sorted(
+            zip(group_ids.tolist(), group_counts.tolist()),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
+    dominant = groups[0]
+    object_fraction = next(
+        (
+            item["fraction"]
+            for item in groups
+            if item["group_id"] == int(SemanticGroup.OBJECT)
+        ),
+        0.0,
+    )
+    return {
+        "top_raw_classes": top_raw,
+        "coarse_groups": groups,
+        "dominant_group": dominant,
+        "object_fraction": float(object_fraction),
+        "collapse_flag": bool(dominant["fraction"] >= collapse_threshold),
+    }
 
 
 def summarize_stability(
@@ -64,4 +137,3 @@ def summarize_stability(
         },
         "coarse_agreement_improvement": grouped_mean - raw_mean,
     }
-

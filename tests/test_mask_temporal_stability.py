@@ -10,6 +10,7 @@ from src.mask_models.semantic_groups import (
 )
 from src.mask_models.temporal_stability import (
     adjacent_agreement,
+    summarize_frame_composition,
     summarize_stability,
 )
 
@@ -64,6 +65,38 @@ class TemporalStabilityTests(unittest.TestCase):
     def test_shape_mismatch_is_rejected(self):
         with self.assertRaises(ValueError):
             summarize_stability(np.zeros((2, 2, 2)), np.zeros((2, 2, 3)))
+
+    def test_composition_explains_catch_all_collapse(self):
+        raw = np.asarray([[0, 0], [0, 1]], dtype=np.uint8)
+        grouped = np.asarray(
+            [
+                [SemanticGroup.OBJECT, SemanticGroup.OBJECT],
+                [SemanticGroup.OBJECT, SemanticGroup.PERSON],
+            ],
+            dtype=np.uint8,
+        )
+        result = summarize_frame_composition(
+            raw,
+            grouped,
+            {0: "painting", 1: "person"},
+            collapse_threshold=0.7,
+        )
+        self.assertEqual(result["top_raw_classes"][0]["class_name"], "painting")
+        self.assertEqual(
+            result["top_raw_classes"][0]["coarse_group_name"],
+            "object",
+        )
+        self.assertEqual(result["object_fraction"], 0.75)
+        self.assertTrue(result["collapse_flag"])
+
+    def test_composition_rejects_invalid_threshold(self):
+        with self.assertRaises(ValueError):
+            summarize_frame_composition(
+                np.zeros((2, 2), dtype=np.uint8),
+                np.zeros((2, 2), dtype=np.uint8),
+                {0: "wall"},
+                collapse_threshold=0.0,
+            )
 
 
 if __name__ == "__main__":

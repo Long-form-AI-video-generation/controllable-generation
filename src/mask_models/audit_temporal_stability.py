@@ -18,7 +18,10 @@ from .semantic_groups import (
     apply_group_lookup,
     build_group_lookup,
 )
-from .temporal_stability import summarize_stability
+from .temporal_stability import (
+    summarize_frame_composition,
+    summarize_stability,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=128)
     parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--top-classes", type=int, default=8)
+    parser.add_argument("--collapse-threshold", type=float, default=0.9)
     return parser.parse_args()
 
 
@@ -201,7 +206,28 @@ def main() -> None:
         )
         coarse = apply_group_lookup(raw, lookup)
         report = summarize_stability(raw, coarse)
-        report.update({"video_id": video_id, "frame_indices": indices})
+        compositions = [
+            summarize_frame_composition(
+                raw_map,
+                coarse_map,
+                model.config.id2label,
+                top_k=args.top_classes,
+                collapse_threshold=args.collapse_threshold,
+            )
+            for raw_map, coarse_map in zip(raw, coarse)
+        ]
+        collapsed_indices = [
+            indices[position]
+            for position, composition in enumerate(compositions)
+            if composition["collapse_flag"]
+        ]
+        report.update({
+            "video_id": video_id,
+            "frame_indices": indices,
+            "frame_composition": compositions,
+            "collapsed_frame_indices": collapsed_indices,
+            "collapsed_frame_count": len(collapsed_indices),
+        })
         reports.append(report)
         save_contact_sheet(
             args.output_dir / f"video_{video_id}_contact_sheet.jpg",
@@ -214,7 +240,8 @@ def main() -> None:
             f"video={video_id} "
             f"raw={report['raw']['mean_adjacent_agreement']:.4f} "
             f"coarse={report['coarse']['mean_adjacent_agreement']:.4f} "
-            f"delta={report['coarse_agreement_improvement']:+.4f}"
+            f"delta={report['coarse_agreement_improvement']:+.4f} "
+            f"collapsed={len(collapsed_indices)}/{len(indices)}"
         )
 
     raw_mean = float(np.mean([
@@ -229,6 +256,8 @@ def main() -> None:
             "frames_per_video": args.frames_per_video,
             "output_size": [args.height, args.width],
             "video_ids": args.video_ids,
+            "top_classes": args.top_classes,
+            "collapse_threshold": args.collapse_threshold,
             "group_names": {int(group): group.name.lower() for group in SemanticGroup},
         },
         "aggregate": {
