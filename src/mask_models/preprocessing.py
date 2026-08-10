@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .labels import (
@@ -119,38 +123,96 @@ def validate_model_contract(model: Any) -> None:
 
 
 def load_segformer(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True):
-    from transformers import AutoConfig, AutoImageProcessor, AutoModelForSemanticSegmentation
-    from safetensors.torch import load_file
-    common = {"cache_dir": cache_dir, "local_files_only": local_files_only}
-    processor = AutoImageProcessor.from_pretrained(
-        config.model_id, revision=config.config_revision, **common
-    )
-    model_config = AutoConfig.from_pretrained(
-        config.model_id, revision=config.config_revision, **common
-    )
-    weights_path = _resolved_weights_path(
+    from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
+
+    config_path = _resolved_artifact_path(
         config,
+        "config.json",
+        revision=config.config_revision,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
     )
-    model = AutoModelForSemanticSegmentation.from_config(model_config)
-    incompatible = model.load_state_dict(load_file(weights_path), strict=True)
-    if incompatible.missing_keys or incompatible.unexpected_keys:
+    processor_path = _resolved_artifact_path(
+        config,
+        "preprocessor_config.json",
+        revision=config.config_revision,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
+    )
+    weights_path = _resolved_weights_path(
+        config, cache_dir=cache_dir, local_files_only=local_files_only
+    )
+
+    with tempfile.TemporaryDirectory(prefix="segformer-b5-safe-") as temporary:
+        assembled = Path(temporary)
+        _link_or_copy(config_path, assembled / "config.json")
+        _link_or_copy(
+            processor_path,
+            assembled / "preprocessor_config.json",
+        )
+        _link_or_copy(weights_path, assembled / "model.safetensors")
+        processor = AutoImageProcessor.from_pretrained(
+            assembled, local_files_only=True
+        )
+        model, loading_info = AutoModelForSemanticSegmentation.from_pretrained(
+            assembled,
+            local_files_only=True,
+            use_safetensors=True,
+            output_loading_info=True,
+        )
+
+    incompatible = {
+        name: loading_info.get(name, [])
+        for name in ("missing_keys", "unexpected_keys", "mismatched_keys")
+        if loading_info.get(name)
+    }
+    if incompatible:
         raise ValueError(
-            "SegFormer safetensors state is incompatible: "
-            f"missing={incompatible.missing_keys}, "
-            f"unexpected={incompatible.unexpected_keys}"
+            f"SegFormer safetensors state is incompatible: {incompatible}"
         )
     validate_model_contract(model)
     return processor, model.eval()
 
 
-def _resolved_weights_path(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:
+def _resolved_artifact_path(
+    config: SegFormerMaskConfig,
+    filename: str,
+    *,
+    revision: str,
+    cache_dir: str | None = None,
+    local_files_only: bool = True,
+) -> str:
     from transformers.utils.hub import cached_file
-    path = cached_file(config.model_id, "model.safetensors", revision=config.weights_revision, cache_dir=cache_dir, local_files_only=local_files_only)
+    path = cached_file(config.model_id, filename, revision=revision, cache_dir=cache_dir, local_files_only=local_files_only)
     if path is None:
-        raise FileNotFoundError("pinned SegFormer safetensors weights are unavailable")
+        raise FileNotFoundError(
+            f"pinned SegFormer artifact is unavailable: {filename}"
+        )
     return path
+
+
+def _resolved_weights_path(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:
+    return _resolved_artifact_path(
+        config,
+        "model.safetensors",
+        revision=config.weights_revision,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
+    )
+
+
+def _link_or_copy(source: str, destination: Path) -> None:
+    """Assemble a local model directory without normally copying 339 MB."""
+    try:
+        destination.symlink_to(Path(source).resolve())
+        return
+    except OSError:
+        pass
+    try:
+        os.link(source, destination)
+        return
+    except OSError:
+        shutil.copy2(source, destination)
 
 
 def resolved_weights_sha256(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:

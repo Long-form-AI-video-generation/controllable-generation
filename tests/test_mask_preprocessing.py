@@ -97,18 +97,15 @@ class MaskPreprocessingContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mismatch at ID 12"):
             validate_model_contract(model)
 
-    def test_loader_does_not_use_pickle_from_pretrained_weights(self) -> None:
-        """The production loader must build from config and read safetensors."""
+    def test_loader_assembles_only_the_pinned_safetensors_model(self) -> None:
         import inspect
         from src.mask_models.preprocessing import load_segformer
 
         source = inspect.getsource(load_segformer)
-        self.assertIn("from_config", source)
-        self.assertIn("load_file", source)
-        self.assertNotIn(
-            "AutoModelForSemanticSegmentation.from_pretrained",
-            source,
-        )
+        self.assertIn("model.safetensors", source)
+        self.assertIn("use_safetensors=True", source)
+        self.assertIn("output_loading_info=True", source)
+        self.assertNotIn("pytorch_model.bin", source)
 
 
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch is unavailable")
