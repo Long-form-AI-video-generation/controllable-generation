@@ -11,7 +11,10 @@ from src.mask_models.preprocessing import (
     MASK_CONTROL_KEY,
     PREPROCESSING_VERSION,
     SEGFORMER_MODEL_ID,
+    SEGFORMER_CONFIG_REVISION,
     SEGFORMER_REVISION,
+    SEGFORMER_WEIGHTS_BLOB_SHA256,
+    SEGFORMER_WEIGHTS_REVISION,
     SegFormerMaskConfig,
     logits_to_id_maps,
     processor_metadata,
@@ -26,7 +29,9 @@ class MaskPreprocessingContractTests(unittest.TestCase):
         metadata = config.to_metadata()
         self.assertEqual(metadata["control_key"], MASK_CONTROL_KEY)
         self.assertEqual(metadata["model_id"], SEGFORMER_MODEL_ID)
-        self.assertEqual(metadata["revision"], SEGFORMER_REVISION)
+        self.assertEqual(metadata["config_revision"], SEGFORMER_CONFIG_REVISION)
+        self.assertEqual(metadata["weights_revision"], SEGFORMER_WEIGHTS_REVISION)
+        self.assertEqual(metadata["weights_blob_sha256"], SEGFORMER_WEIGHTS_BLOB_SHA256)
         self.assertEqual(metadata["weights_format"], "safetensors")
         self.assertEqual(metadata["num_classes"], 150)
         self.assertEqual(metadata["output_size"], [128, 128])
@@ -49,8 +54,10 @@ class MaskPreprocessingContractTests(unittest.TestCase):
             SegFormerMaskConfig(batch_size=0)
         with self.assertRaisesRegex(ValueError, "unsupported mask extractor"):
             SegFormerMaskConfig(model_id="another/model")
-        with self.assertRaisesRegex(ValueError, "unsupported SegFormer revision"):
-            SegFormerMaskConfig(revision="main")
+        with self.assertRaisesRegex(ValueError, "config revision"):
+            SegFormerMaskConfig(config_revision="main")
+        with self.assertRaisesRegex(ValueError, "weights revision"):
+            SegFormerMaskConfig(weights_revision="main")
 
     def test_rgb_frame_contract(self) -> None:
         frames = np.zeros((8, 32, 48, 3), dtype=np.uint8)

@@ -237,7 +237,8 @@ def main() -> None:
     saved_preprocessing = checkpoint.get("config", {}).get("preprocessing", {})
     runtime_preprocessing = preprocessing.to_metadata()
     identity_keys = (
-        "model_id", "revision", "weights_format", "num_classes",
+        "model_id", "config_revision", "weights_revision",
+        "weights_blob_sha256", "weights_format", "num_classes",
         "label_order_sha256", "preprocessing_version",
     )
     mismatches = {

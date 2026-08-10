@@ -16,7 +16,13 @@ from .labels import (
 )
 
 SEGFORMER_MODEL_ID = "nvidia/segformer-b5-finetuned-ade-640-640"
-SEGFORMER_REVISION = "739f5d4692954e4a185eac280dec1ba5a7d52f1d"
+SEGFORMER_CONFIG_REVISION = "739f5d4692954e4a185eac280dec1ba5a7d52f1d"
+SEGFORMER_WEIGHTS_REVISION = "f4c8e8f5b581b6bc8ed5208e4bd139d95f65610f"
+SEGFORMER_WEIGHTS_BLOB_SHA256 = (
+    "3f451be733bc5f69227886ef4a472a373f3440ad11b59b3b82cf50f500855b62"
+)
+# Backward-compatible name for callers that only need the configuration ID.
+SEGFORMER_REVISION = SEGFORMER_CONFIG_REVISION
 PREPROCESSING_VERSION = "segformer-b5-ade20k-raw-v1"
 MASK_CONTROL_KEY = "mask_encoded"
 
@@ -36,7 +42,8 @@ class SegFormerMaskConfig:
     output_size: tuple[int, int] = (128, 128)
     batch_size: int = 4
     model_id: str = SEGFORMER_MODEL_ID
-    revision: str = SEGFORMER_REVISION
+    config_revision: str = SEGFORMER_CONFIG_REVISION
+    weights_revision: str = SEGFORMER_WEIGHTS_REVISION
     preprocessing_version: str = PREPROCESSING_VERSION
 
     def __post_init__(self) -> None:
@@ -45,15 +52,20 @@ class SegFormerMaskConfig:
         object.__setattr__(self, "output_size", _positive_pair(self.output_size, "output_size"))
         if self.model_id != SEGFORMER_MODEL_ID:
             raise ValueError(f"unsupported mask extractor {self.model_id!r}")
-        if self.revision != SEGFORMER_REVISION:
-            raise ValueError(f"unsupported SegFormer revision {self.revision!r}")
+        if self.config_revision != SEGFORMER_CONFIG_REVISION:
+            raise ValueError(f"unsupported SegFormer config revision {self.config_revision!r}")
+        if self.weights_revision != SEGFORMER_WEIGHTS_REVISION:
+            raise ValueError(f"unsupported SegFormer weights revision {self.weights_revision!r}")
         if self.preprocessing_version != PREPROCESSING_VERSION:
             raise ValueError("unsupported preprocessing version")
 
     def to_metadata(self) -> dict[str, Any]:
         return {
             "control_key": MASK_CONTROL_KEY, "model_id": self.model_id,
-            "revision": self.revision, "weights_format": "safetensors",
+            "config_revision": self.config_revision,
+            "weights_revision": self.weights_revision,
+            "weights_blob_sha256": SEGFORMER_WEIGHTS_BLOB_SHA256,
+            "weights_format": "safetensors",
             "num_classes": NUM_ADE20K_CLASSES, "num_frames": self.num_frames,
             "output_size": list(self.output_size), "batch_size": self.batch_size,
             "resize_logits": "bilinear_align_corners_false_float32",
@@ -107,10 +119,21 @@ def validate_model_contract(model: Any) -> None:
 
 
 def load_segformer(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True):
-    from transformers import AutoImageProcessor, AutoModelForSemanticSegmentation
-    common = {"revision": config.revision, "cache_dir": cache_dir, "local_files_only": local_files_only}
-    processor = AutoImageProcessor.from_pretrained(config.model_id, **common)
-    model = AutoModelForSemanticSegmentation.from_pretrained(config.model_id, use_safetensors=True, **common)
+    from transformers import AutoConfig, AutoImageProcessor, AutoModelForSemanticSegmentation
+    common = {"cache_dir": cache_dir, "local_files_only": local_files_only}
+    processor = AutoImageProcessor.from_pretrained(
+        config.model_id, revision=config.config_revision, **common
+    )
+    model_config = AutoConfig.from_pretrained(
+        config.model_id, revision=config.config_revision, **common
+    )
+    model = AutoModelForSemanticSegmentation.from_pretrained(
+        config.model_id,
+        config=model_config,
+        revision=config.weights_revision,
+        use_safetensors=True,
+        **common,
+    )
     validate_model_contract(model)
     return processor, model.eval()
 
@@ -118,14 +141,20 @@ def load_segformer(config: SegFormerMaskConfig, *, cache_dir: str | None = None,
 def resolved_weights_sha256(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:
     """Hash the exact cached safetensors artifact selected by the pinned revision."""
     from transformers.utils.hub import cached_file
-    path = cached_file(config.model_id, "model.safetensors", revision=config.revision, cache_dir=cache_dir, local_files_only=local_files_only)
+    path = cached_file(config.model_id, "model.safetensors", revision=config.weights_revision, cache_dir=cache_dir, local_files_only=local_files_only)
     if path is None:
         raise FileNotFoundError("pinned SegFormer safetensors weights are unavailable")
     digest = hashlib.sha256()
     with open(path, "rb") as source:
         for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    actual = digest.hexdigest()
+    if actual != SEGFORMER_WEIGHTS_BLOB_SHA256:
+        raise ValueError(
+            f"SegFormer weights hash mismatch: expected "
+            f"{SEGFORMER_WEIGHTS_BLOB_SHA256}, got {actual}"
+        )
+    return actual
 
 
 def predict_id_maps(frames: Any, processor: Any, model: Any, config: SegFormerMaskConfig, *, device: str):
