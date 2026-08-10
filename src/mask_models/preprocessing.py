@@ -120,6 +120,7 @@ def validate_model_contract(model: Any) -> None:
 
 def load_segformer(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True):
     from transformers import AutoConfig, AutoImageProcessor, AutoModelForSemanticSegmentation
+    from safetensors.torch import load_file
     common = {"cache_dir": cache_dir, "local_files_only": local_files_only}
     processor = AutoImageProcessor.from_pretrained(
         config.model_id, revision=config.config_revision, **common
@@ -127,23 +128,38 @@ def load_segformer(config: SegFormerMaskConfig, *, cache_dir: str | None = None,
     model_config = AutoConfig.from_pretrained(
         config.model_id, revision=config.config_revision, **common
     )
-    model = AutoModelForSemanticSegmentation.from_pretrained(
-        config.model_id,
-        config=model_config,
-        revision=config.weights_revision,
-        use_safetensors=True,
-        **common,
+    weights_path = _resolved_weights_path(
+        config,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
     )
+    model = AutoModelForSemanticSegmentation.from_config(model_config)
+    incompatible = model.load_state_dict(load_file(weights_path), strict=True)
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        raise ValueError(
+            "SegFormer safetensors state is incompatible: "
+            f"missing={incompatible.missing_keys}, "
+            f"unexpected={incompatible.unexpected_keys}"
+        )
     validate_model_contract(model)
     return processor, model.eval()
 
 
-def resolved_weights_sha256(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:
-    """Hash the exact cached safetensors artifact selected by the pinned revision."""
+def _resolved_weights_path(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:
     from transformers.utils.hub import cached_file
     path = cached_file(config.model_id, "model.safetensors", revision=config.weights_revision, cache_dir=cache_dir, local_files_only=local_files_only)
     if path is None:
         raise FileNotFoundError("pinned SegFormer safetensors weights are unavailable")
+    return path
+
+
+def resolved_weights_sha256(config: SegFormerMaskConfig, *, cache_dir: str | None = None, local_files_only: bool = True) -> str:
+    """Hash the exact cached safetensors artifact selected by the pinned revision."""
+    path = _resolved_weights_path(
+        config,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
+    )
     digest = hashlib.sha256()
     with open(path, "rb") as source:
         for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
