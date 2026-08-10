@@ -9,7 +9,7 @@ import numpy as np
 
 
 class SemanticGroup(IntEnum):
-    BACKGROUND = 0
+    UNKNOWN = 0
     PERSON = 1
     VEHICLE = 2
     GROUND = 3
@@ -18,6 +18,7 @@ class SemanticGroup(IntEnum):
     SKY = 6
     WATER = 7
     OBJECT = 8
+    OVERHEAD = 9
 
 
 _KEYWORDS = {
@@ -26,7 +27,7 @@ _KEYWORDS = {
     },
     SemanticGroup.VEHICLE: {
         "airplane", "bicycle", "boat", "bus", "car", "minibike",
-        "ship", "truck", "van",
+        "ship", "tank", "truck", "van",
     },
     SemanticGroup.GROUND: {
         "carpet", "conveyer belt", "dirt track", "earth", "field",
@@ -35,10 +36,13 @@ _KEYWORDS = {
         "step", "track",
     },
     SemanticGroup.STRUCTURE: {
-        "awning", "blind", "bridge", "building", "ceiling", "column",
+        "blind", "bridge", "building", "column",
         "door", "escalator", "fence", "fireplace", "grandstand",
-        "house", "hovel", "railing", "roof", "shelf", "skyscraper",
+        "house", "hovel", "pier", "railing", "shelf", "skyscraper",
         "stairs", "stairway", "tent", "wall", "windowpane",
+    },
+    SemanticGroup.OVERHEAD: {
+        "awning", "canopy", "ceiling", "roof",
     },
     SemanticGroup.NATURE: {
         "flower", "hill", "mountain", "palm", "plant", "rock", "sand",
@@ -68,6 +72,7 @@ def group_for_label(name: str) -> SemanticGroup:
         SemanticGroup.WATER,
         SemanticGroup.SKY,
         SemanticGroup.GROUND,
+        SemanticGroup.OVERHEAD,
         SemanticGroup.STRUCTURE,
         SemanticGroup.NATURE,
     ):
@@ -99,4 +104,3 @@ def apply_group_lookup(labels: np.ndarray, lookup: np.ndarray) -> np.ndarray:
     if values.size and (values.min() < 0 or values.max() >= len(lookup)):
         raise ValueError("labels contain a class ID outside the lookup table")
     return lookup[values]
-

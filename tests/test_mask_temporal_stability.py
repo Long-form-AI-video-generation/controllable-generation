@@ -19,8 +19,26 @@ class SemanticGroupTests(unittest.TestCase):
     def test_known_and_unknown_labels(self):
         self.assertEqual(group_for_label("person"), SemanticGroup.PERSON)
         self.assertEqual(group_for_label("car"), SemanticGroup.VEHICLE)
+        self.assertEqual(group_for_label("tank"), SemanticGroup.VEHICLE)
         self.assertEqual(group_for_label("wall"), SemanticGroup.STRUCTURE)
+        self.assertEqual(group_for_label("pier"), SemanticGroup.STRUCTURE)
+        self.assertEqual(group_for_label("ceiling"), SemanticGroup.OVERHEAD)
+        self.assertEqual(group_for_label("roof"), SemanticGroup.OVERHEAD)
         self.assertEqual(group_for_label("chair"), SemanticGroup.OBJECT)
+
+    def test_wall_and_ceiling_remain_distinct(self):
+        lookup = build_group_lookup({0: "wall", 1: "ceiling"})
+        grouped = apply_group_lookup(
+            np.asarray([[0, 1]], dtype=np.int64),
+            lookup,
+        )
+        np.testing.assert_array_equal(
+            grouped,
+            np.asarray(
+                [[SemanticGroup.STRUCTURE, SemanticGroup.OVERHEAD]],
+                dtype=np.uint8,
+            ),
+        )
 
     def test_lookup_accepts_transformers_string_keys(self):
         lookup = build_group_lookup({"0": "wall", "1": "building"})
