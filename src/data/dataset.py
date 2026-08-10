@@ -325,7 +325,12 @@ class ControllableVideoDataset(Dataset):
                 )
             data = np.asarray(encoded[self.control_key])
 
-        tensor = torch.from_numpy(data).half()
+        if self.control_key == 'mask_encoded':
+            if not np.issubdtype(data.dtype, np.integer):
+                raise TypeError(f"{encoded_path}: mask must contain integer IDs")
+            tensor = torch.from_numpy(data.astype(np.int64, copy=False))
+        else:
+            tensor = torch.from_numpy(data).half()
         if tensor.dim() == 5 and tensor.shape[0] == 1:
             tensor = tensor.squeeze(0)
         if tensor.dim() != 4:
@@ -335,14 +340,23 @@ class ControllableVideoDataset(Dataset):
             )
         if (
             tensor.shape[1] != self.num_frames
-            and (self.strict or self.control_key == 'sketch_encoded')
+            and (self.strict or self.control_key in {'sketch_encoded', 'mask_encoded'})
         ):
             raise ValueError(
                 f"{encoded_path}: expected {self.num_frames} control frames, "
                 f"got {tensor.shape[1]}"
             )
-        if not torch.isfinite(tensor).all():
+        if tensor.is_floating_point() and not torch.isfinite(tensor).all():
             raise ValueError(f"{encoded_path}: control contains NaN or Inf")
+
+        if self.control_key == 'mask_encoded':
+            if tensor.shape[0] != 1:
+                raise ValueError(f"{encoded_path}: mask must have one channel")
+            expected_spatial = (self.resolution[1], self.resolution[0])
+            if tensor.shape[-2:] != expected_spatial:
+                raise ValueError(f"{encoded_path}: mask spatial shape must be {expected_spatial}")
+            if tensor.numel() == 0 or int(tensor.min()) < 0 or int(tensor.max()) > 149:
+                raise ValueError(f"{encoded_path}: mask IDs must be in [0,149]")
 
         if self.control_key == 'sketch_encoded':
             if tensor.shape[0] != 1:
@@ -397,7 +411,7 @@ class ControllableVideoDataset(Dataset):
 
             print(f"Warning: error loading sample {idx}: {error}")
             control_channels = (
-                1 if self.control_key == 'sketch_encoded' else 256
+                1 if self.control_key in {'sketch_encoded', 'mask_encoded'} else 256
             )
             return {
                 'controls': {
