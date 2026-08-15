@@ -227,6 +227,18 @@ def main() -> None:
             pipeline.model.to("cuda")
         image = Image.open(args.ref_image).convert("RGB")
 
+        # Make the matched no-control baseline before any expert reaches a GPU.
+        # This is both the intended comparison and an independent WAN health check.
+        _seed_everything(args.seed)
+        with torch.inference_mode():
+            base_video = _generate(pipeline, args, image)
+        describe_video_tensor("base", base_video)
+        base_frames = tensor_to_frames(base_video)
+        save_rgb_video(base_frames, output_dir / "base.mp4", fps=config.fps)
+        save_debug_frames(base_frames, output_dir, "base")
+        del base_video
+        torch.cuda.empty_cache()
+
         with MultiControlHookController(pipeline.model, experts).to(args.controller_device) as controller:
             controller.eval()
             controls = controls_to_adapter_tensors(
@@ -234,18 +246,12 @@ def main() -> None:
                 device=args.controller_device,
             )
             adapter_signals = controller.compute_adapter_signals(controls)
+            # CUDA kernels are asynchronous.  Synchronize the expert device
+            # here so any adapter failure is reported at its actual source,
+            # rather than later in WAN's next GPU-0 operation.
+            torch.cuda.synchronize(args.controller_device)
             del controls
             torch.cuda.empty_cache()
-
-            controller.deactivate_controls()
-            _seed_everything(args.seed)
-            with torch.inference_mode():
-                base_video = _generate(pipeline, args, image)
-            describe_video_tensor("base", base_video)
-            base_frames = tensor_to_frames(base_video)
-            save_rgb_video(base_frames, output_dir / "base.mp4", fps=config.fps)
-            save_debug_frames(base_frames, output_dir, "base")
-            del base_video
 
             for combination in config.combinations:
                 tag = _combination_tag(combination)
