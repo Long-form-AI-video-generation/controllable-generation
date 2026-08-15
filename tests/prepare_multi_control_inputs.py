@@ -135,51 +135,69 @@ def main() -> None:
         output_size=target_size,
     ) if "mask" in experts else None
     midas_config = None
-    midas = transform = mask_processor = mask_model = None
-    try:
-        if "depth" in experts:
-            if not args.midas_repo or not args.midas_weights:
-                raise ValueError("depth requires --midas-repo and --midas-weights")
-            midas_config = MidasConfig(
-                repo_dir=Path(args.midas_repo),
-                weights_path=Path(args.midas_weights),
-                output_size=target_size,
+    controls: dict[str, np.ndarray] = {}
+    if "canny" in experts:
+        controls.update(
+            build_matched_controls(
+                sequence,
+                experts=["canny"],
+                canny_config=canny_config,
             )
-            midas, transform = load_midas_local(midas_config, device=args.midas_device)
-        if "mask" in experts:
-            mask_processor, mask_model = load_segformer(
-                mask_config,
-                cache_dir=args.segformer_cache_dir,
-                local_files_only=True,
-            )
-        controls = build_matched_controls(
-            sequence,
-            experts=experts,
-            canny_config=canny_config,
-            mask_config=mask_config,
-            mask_processor=mask_processor,
-            mask_model=mask_model,
-            mask_device=args.segformer_device,
-            midas_config=midas_config,
-            midas=midas,
-            midas_transform=transform,
-            midas_device=args.midas_device,
         )
-        identities = preprocessing_identities(
-            experts=experts,
-            canny_config=canny_config,
-            mask_config=mask_config,
-            midas_config=midas_config,
-            mask_cache_dir=args.segformer_cache_dir,
+    if "depth" in experts:
+        if not args.midas_repo or not args.midas_weights:
+            raise ValueError("depth requires --midas-repo and --midas-weights")
+        midas_config = MidasConfig(
+            repo_dir=Path(args.midas_repo),
+            weights_path=Path(args.midas_weights),
+            output_size=target_size,
         )
-    finally:
-        del midas, transform, mask_processor, mask_model
-        gc.collect()
+        midas, transform = load_midas_local(midas_config, device=args.midas_device)
         try:
+            controls.update(
+                build_matched_controls(
+                    sequence,
+                    experts=["depth"],
+                    midas_config=midas_config,
+                    midas=midas,
+                    midas_transform=transform,
+                    midas_device=args.midas_device,
+                )
+            )
+        finally:
+            del midas, transform
+            gc.collect()
             import torch
             torch.cuda.empty_cache()
-        except (ImportError, RuntimeError):
-            pass
+    if "mask" in experts:
+        mask_processor, mask_model = load_segformer(
+            mask_config,
+            cache_dir=args.segformer_cache_dir,
+            local_files_only=True,
+        )
+        try:
+            controls.update(
+                build_matched_controls(
+                    sequence,
+                    experts=["mask"],
+                    mask_config=mask_config,
+                    mask_processor=mask_processor,
+                    mask_model=mask_model,
+                    mask_device=args.segformer_device,
+                )
+            )
+        finally:
+            del mask_processor, mask_model
+            gc.collect()
+            import torch
+            torch.cuda.empty_cache()
+    identities = preprocessing_identities(
+        experts=experts,
+        canny_config=canny_config,
+        mask_config=mask_config,
+        midas_config=midas_config,
+        mask_cache_dir=args.segformer_cache_dir,
+    )
 
     metadata: dict[str, object] = {
         "source_video": str(Path(args.ref_video).resolve()),
