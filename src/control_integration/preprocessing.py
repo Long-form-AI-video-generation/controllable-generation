@@ -334,3 +334,31 @@ def preprocessing_identities(
             "input_color_order": "RGB_from_shared_BGR",
         }
     return result
+
+
+def controls_to_adapter_tensors(
+    controls: Mapping[str, np.ndarray],
+    *,
+    device: str,
+) -> dict[str, torch.Tensor]:
+    """Convert validated bundle arrays to each standalone adapter's contract."""
+
+    selected = canonicalize_expert_names(list(controls))
+    result: dict[str, torch.Tensor] = {}
+    for name in selected:
+        array = controls[name]
+        if name == "depth":
+            value = torch.from_numpy(np.ascontiguousarray(array)).float()
+            # Depth's validated one-control adapter was trained on 256 channels.
+            result[name] = value.expand(-1, 256, -1, -1, -1).clone().to(device)
+        elif name == "canny":
+            result[name] = (
+                torch.from_numpy(np.ascontiguousarray(array)).float().to(device)
+            )
+        elif name == "mask":
+            result[name] = (
+                torch.from_numpy(np.ascontiguousarray(array)).long().to(device)
+            )
+        else:  # ``canonicalize_expert_names`` makes this unreachable.
+            raise AssertionError(name)
+    return result
