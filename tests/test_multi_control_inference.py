@@ -149,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--canny-strength", type=float, default=0.5)
     parser.add_argument("--mask-strength", type=float, default=0.5)
     parser.add_argument("--combined-ratio-cap", type=float, default=0.1)
+    parser.add_argument(
+        "--controller-device",
+        default="cuda:1",
+        help="Device for adapters and zero-convs; WAN remains on its pipeline device.",
+    )
     parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--offload", action="store_true", default=True)
     parser.add_argument("--no-offload", dest="offload", action="store_false")
@@ -222,9 +227,12 @@ def main() -> None:
             pipeline.model.to("cuda")
         image = Image.open(args.ref_image).convert("RGB")
 
-        with MultiControlHookController(pipeline.model, experts).to("cuda") as controller:
+        with MultiControlHookController(pipeline.model, experts).to(args.controller_device) as controller:
             controller.eval()
-            controls = controls_to_adapter_tensors(bundle.controls, device="cuda")
+            controls = controls_to_adapter_tensors(
+                bundle.controls,
+                device=args.controller_device,
+            )
             adapter_signals = controller.compute_adapter_signals(controls)
             del controls
             torch.cuda.empty_cache()

@@ -187,25 +187,42 @@ class MultiControlHookController(nn.Module):
             raise RuntimeError("WAN patch grid exceeds the hidden-state sequence")
 
         residuals: dict[str, torch.Tensor] = {}
+        hidden_by_device: dict[torch.device, torch.Tensor] = {
+            hidden_states.device: hidden_states,
+        }
         for name in state.enabled_experts:
             signal = self._expand_cfg_batch(
                 state.adapter_signals[name],
                 hidden_states.shape[0],
                 name,
             )
+            projection = self.zero_convs[name][projection_index]
+            projection_device = next(projection.parameters()).device
+            # The frozen WAN is intentionally allowed to live on a different
+            # GPU from the trained control experts.  Moving this relatively
+            # small hidden-state view to the expert GPU prevents three sets of
+            # zero-convs from exhausting the WAN device.  Only the bounded
+            # residual returns to the WAN device for the final addition.
+            projection_hidden = hidden_by_device.get(projection_device)
+            if projection_hidden is None:
+                projection_hidden = hidden_states.to(projection_device)
+                hidden_by_device[projection_device] = projection_hidden
+            if signal.device != projection_device:
+                signal = signal.to(projection_device)
             token_count = signal.shape[1]
             if token_count % (16 * 16) != 0:
                 raise ValueError(f"{name} signal has invalid token count {token_count}")
             source_grid = (token_count // (16 * 16), 16, 16)
-            residuals[name] = build_expert_residual(
-                hidden_states,
+            residual = build_expert_residual(
+                projection_hidden,
                 signal,
-                self.zero_convs[name][projection_index],
+                projection,
                 source_grid=source_grid,
                 target_grid=self._wan_grid,
                 ratio_cap=state.ratio_caps[name],
                 strength=state.strengths[name],
             )
+            residuals[name] = residual.to(hidden_states.device)
         fused, diagnostics = fuse_residuals(
             hidden_states,
             residuals,
