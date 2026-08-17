@@ -201,6 +201,11 @@ def main() -> None:
     metadata: dict[str, object] = {
         "status": "running",
         "arguments": vars(args),
+        "wan_runtime": {
+            "t5_cpu": True,
+            "init_on_cpu": True,
+            "convert_model_dtype": True,
+        },
         "prepared_controls": {
             "directory": str(bundle.root),
             "sha256": bundle.artifact_sha256,
@@ -221,7 +226,7 @@ def main() -> None:
     try:
         pipeline = wan.WanTI2V(
             config=WAN_CONFIGS["ti2v-5B"], checkpoint_dir=args.wan_dir,
-            device_id=0, rank=0, t5_cpu=True,
+            device_id=0, rank=0, t5_cpu=True, convert_model_dtype=True,
         )
         if not args.offload:
             pipeline.model.to("cuda")
