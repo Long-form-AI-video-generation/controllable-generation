@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import time
 
+
+import torch.nn.functional as F
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
 WAN_PATH = project_root / 'Wan2.2'
@@ -18,8 +20,7 @@ from wan.modules.tokenizers import HuggingfaceTokenizer
 from wan.configs import WAN_CONFIGS
 
 sys.path.insert(0, str(current_file.parent.parent))
-from models.control_adapter import ControlAdapter
-
+from depth_models.control_adapter import ControlAdapter
 
 
 class ZeroLinear(nn.Module):
@@ -42,7 +43,7 @@ class ControllableWAN(nn.Module):
         self,
         checkpoint_dir: str,
         device: str = 'cuda',
-        control_injection_layers: list = [0, 8, 16,24],
+        control_injection_layers: list = [0,4,8,12,16,20,24,28],
         spatial_downsample: int = 16,
     ):
         super().__init__()
@@ -73,10 +74,10 @@ class ControllableWAN(nn.Module):
         print("  [4/5] Creating ControlAdapter...")
         self.control_adapter = ControlAdapter(
             control_dim=256,
-            hidden_dim=1024,
+            hidden_dim=512,
             dit_dim=dit_dim,
-            num_controls=6,
-            use_gradient_checkpointing=True,
+            num_controls=1,
+            use_gradient_checkpointing=False,
         ).to(device)
 
         print("  [5/5] Creating zero-conv projections (one per injection layer)...")
@@ -108,7 +109,11 @@ class ControllableWAN(nn.Module):
         print(f"{'='*70}\n")
 
     def _setup_control_hooks(self):
-        
+        self._current_wan_grid = None
+        self._grid_hook = self.wan.patch_embedding.register_forward_hook(
+            self._capture_wan_grid_hook
+        )
+
         self.hooks = []
         for hook_idx, layer_idx in enumerate(self.control_injection_layers):
             if layer_idx >= len(self.wan.blocks):
@@ -118,6 +123,13 @@ class ControllableWAN(nn.Module):
             hook = block.register_forward_pre_hook(self._control_injection_hook)
             self.hooks.append(hook)
 
+
+    def _capture_wan_grid_hook(self, module, inputs, output):
+        """Capture WAN's real post-patch temporal and spatial grid."""
+        self._current_wan_grid = tuple(
+            int(value) for value in output.shape[2:]
+        )
+
     def _control_injection_hook(self, module, input):
         if self._control_signal is None:
             return input
@@ -126,32 +138,67 @@ class ControllableWAN(nn.Module):
         B, L, C = x.shape
         hook_idx = self._block_to_hook_idx[id(module)]
         zero_conv = self.zero_convs[hook_idx]
-        ctrl = self._control_signal 
+        ctrl = self._control_signal  
 
         if ctrl.shape[1] != L:
-          
             B_c, S_c, C_c = ctrl.shape
-            
+
+            if S_c % (16 * 16) != 0:
+                raise RuntimeError(
+                    f"Invalid control token count: {S_c}"
+                )
+
+            if self._current_wan_grid is None:
+                raise RuntimeError("WAN patch grid was not captured")
+
             T_c = S_c // (16 * 16)
-            ctrl = ctrl.view(B_c * T_c, 16, 16, C_c).permute(0, 3, 1, 2) 
-         
-            hw = L // T_c if T_c > 0 else L
-            h = w = int(hw ** 0.5)
-            
-            ctrl = nn.functional.interpolate(ctrl, size=(h, w), mode='bilinear', align_corners=False)
-            ctrl = ctrl.permute(0, 2, 3, 1).reshape(B_c, T_c * h * w, C_c)
-            
-           
-            if ctrl.shape[1] != L:
-                ctrl = ctrl.permute(0, 2, 1)
-                ctrl = nn.functional.interpolate(ctrl, size=L, mode='linear', align_corners=False)
-                ctrl = ctrl.permute(0, 2, 1)
+            T_real, H_real, W_real = self._current_wan_grid
+            real_length = T_real * H_real * W_real
+
+            if real_length > L:
+                raise RuntimeError(
+                    f"WAN grid has {real_length} tokens but L={L}"
+                )
+
+            ctrl = ctrl.reshape(
+                B_c, T_c, 16, 16, C_c
+            ).permute(0, 4, 1, 2, 3)
+
+            ctrl = F.interpolate(
+                ctrl.float(),
+                size=(T_real, H_real, W_real),
+                mode="trilinear",
+                align_corners=False,
+            )
+
+            ctrl = ctrl.permute(
+                0, 2, 3, 4, 1
+            ).reshape(B_c, real_length, C_c)
+
+            if real_length < L:
+                padding = ctrl.new_zeros(
+                    B_c, L - real_length, C_c
+                )
+                ctrl = torch.cat([ctrl, padding], dim=1)
+
+            assert ctrl.shape[1] == L
 
         ctrl = zero_conv(ctrl)
+
+     
+        x_norm = x.norm(dim=-1, keepdim=True).mean()
+        ctrl_norm = ctrl.norm(dim=-1, keepdim=True).mean()
+        if ctrl_norm > 0:
+            ctrl = ctrl * (x_norm / ctrl_norm).clamp(max=1.0) * 0.1
+
+        # Default 1.0 preserves the checkpoint's original behavior.
+        control_strength = float(
+            getattr(self, "_control_strength", 1.0)
+        )
+        ctrl = ctrl * control_strength
+
         x = x + ctrl
         return (x,) + input[1:]
-
-    
 
     def _load_vae(self):
         from wan.modules.vae2_2 import Wan2_2_VAE
@@ -221,6 +268,8 @@ class ControllableWAN(nn.Module):
 
         for param in wan.parameters():
             param.requires_grad = False
+
+        
 
         print(f"   WAN loaded ({model_config.get('num_layers', 32)} layers)")
         return wan
@@ -303,8 +352,8 @@ class ControllableWAN(nn.Module):
 
         if control_features is not None:
             t0 = time.time()
-            controls_device = {k: v.to(self.device) for k, v in control_features.items()}
-            # controls_device = control_features
+            # controls_device = {k: v.to(self.device) for k, v in control_features.items()}
+            controls_device = control_features
             print(f"  Control move:    {time.time() - t0:.1f}s")
 
             t0 = time.time()
@@ -330,7 +379,7 @@ class ControllableWAN(nn.Module):
 
 
         t0 = time.time()
-      
+        print('encoding text')
         if isinstance(prompts, torch.Tensor):
           
             text_embeddings = [prompts[i].to(self.device, dtype=torch.float32) 
@@ -343,8 +392,8 @@ class ControllableWAN(nn.Module):
             text_embeddings = self.encode_text(prompts)
         
         context = text_embeddings
-
         x = [latent[i] for i in range(latent.shape[0])]
+
         
 
         B, C, T, H, W = latent.shape
@@ -354,7 +403,7 @@ class ControllableWAN(nn.Module):
      
         seq_len_actual = patch_t * patch_h * patch_w
         seq_len = ((seq_len_actual + 63) // 64) * 64
-        
+        print(seq_len, 'seq len')
         t0 = time.time()
        
         noise_pred = self.wan(
@@ -369,12 +418,11 @@ class ControllableWAN(nn.Module):
         noise_pred = torch.stack(list(noise_pred))
         self._control_signal = None   
 
-        
+
         
         torch.cuda.empty_cache()
-       
-        return noise_pred
 
+        return noise_pred
 
 
 

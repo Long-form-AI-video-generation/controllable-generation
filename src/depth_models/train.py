@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / 'Wan2.2'))
 
 from data.dataset import ControllableVideoDataset
-from models.wan_controllable import ControllableWAN
+from depth_models.wan_controllable import ControllableWAN
 
 
 
@@ -38,6 +38,21 @@ def timestep_weighted_flow_loss(
     per_element_loss = (noise_pred - target) ** 2          
     weighted_loss = (per_element_loss * weights).mean()
     return weighted_loss
+
+
+def temporal_smoothness_loss(
+    noise_pred: torch.Tensor,
+) -> torch.Tensor:
+    """Mean squared difference between adjacent latent frames."""
+    if noise_pred.dim() != 5:
+        raise ValueError(
+            f"Expected [B,C,T,H,W] prediction, got {noise_pred.shape}"
+        )
+    if noise_pred.shape[2] <= 1:
+        return noise_pred.new_zeros(())
+    return (
+        noise_pred[:, :, 1:] - noise_pred[:, :, :-1]
+    ).square().mean()
 
 
 def control_adherence_loss(
@@ -83,7 +98,14 @@ class MultiVideoTrainer:
         self.config       = config
         self.device       = device
 
-        
+        # if torch.cuda.device_count() > 1:
+        #     print(f"\n  Using {torch.cuda.device_count()} GPUs!")
+        #     self.model      = nn.DataParallel(model)
+        #     self.base_model = model
+        # else:
+        #     print("\n  Single GPU detected")
+        #     self.model      = model
+        #     self.base_model = model
         print(f"\n  GPUs: {torch.cuda.device_count()} (cuda:0=WAN+adapter, cuda:1=VAE)")
         self.model = model
         self.base_model = model
@@ -115,7 +137,7 @@ class MultiVideoTrainer:
             num_train_timesteps=1000,
         )
 
-        self.scaler = torch.cuda.amp.GradScaler(enabled=False)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=config['mixed_precision'])
 
         self.global_step   = 0
         self.start_epoch   = 0
@@ -253,30 +275,32 @@ class MultiVideoTrainer:
    
 
     def train_step(self, batch) -> tuple[torch.Tensor, dict]:
-        
         video    = batch['video'].to(self.device)
         controls = {k: v.to(self.device) for k, v in batch['controls'].items()}
-       
+        active_controls = ['depth_encoded']
+        controls = {k: v for k, v in controls.items() if k in active_controls}
+        # text_embeddings = batch['caption'].to(self.device)
         caption = batch['caption']
         if isinstance(caption, torch.Tensor):
             text_embeddings = caption.to(self.device)
         else:
-            
+            # raw strings from DataLoader come as a list
             text_embeddings = list(caption)
 
         with torch.no_grad():
             latent = self.base_model.encode_video(video)
         del video
 
-        
+        print(f"  latent shape: {latent.shape}")
         torch.cuda.empty_cache()
 
         B = latent.shape[0]
         timesteps = torch.randint(50, 950, (B,), device=self.device).long()
         noise     = torch.randn_like(latent, dtype=torch.float32)
         t         = (timesteps.float() / 1000.0).view(-1, 1, 1, 1, 1)
-        noisy     = (1 - t) * latent + t * noise
-        target    = noise - latent
+        noisy     = ((1 - t) * latent + t * noise)
+        target    = (noise - latent)
+        del t, noise
         del latent
         torch.cuda.empty_cache()
        
@@ -290,23 +314,32 @@ class MultiVideoTrainer:
                 control_features=controls,
             )
 
-        w_flow     = self.config.get('loss_flow_weight', 1.0)
-        w_weighted = self.config.get('loss_weighted_weight', 0.1)
+        w_flow = self.config.get('loss_flow_weight', 1.0)
+        w_weighted = self.config.get(
+            'loss_weighted_weight', 0.1
+        )
+        w_temporal = self.config.get(
+            'loss_temporal_weight', 0.05
+        )
 
-        loss_flow     = flow_matching_loss(noise_pred, target)
-        loss_weighted = timestep_weighted_flow_loss(noise_pred, target, timesteps)
-        total_loss    = w_flow * loss_flow + w_weighted * loss_weighted
+        loss_flow = flow_matching_loss(noise_pred, target)
+        loss_weighted = timestep_weighted_flow_loss(
+            noise_pred, target, timesteps
+        )
+        loss_temporal = temporal_smoothness_loss(noise_pred)
+        total_loss = (
+            w_flow * loss_flow
+            + w_weighted * loss_weighted
+            + w_temporal * loss_temporal
+        )
 
       
         gates = torch.sigmoid(self.base_model.control_adapter.modality_gates)
         gate_entropy = -(gates * torch.log(gates + 1e-8) +
                         (1 - gates) * torch.log(1 - gates + 1e-8)).mean()
 
-        pred_frames = noise_pred.reshape(B, -1, noise_pred.shape[-1] if noise_pred.dim()==3 else noise_pred.shape[1])
-        frame_diff = (pred_frames[:, 1:] - pred_frames[:, :-1]).pow(2).mean()
-        total_loss = (total_loss + 0.05 * frame_diff)                 
-        total_loss = total_loss + 0.01 * gate_entropy
-        
+        # total_loss = total_loss + 0.01 * gate_entropy
+
         del noisy, noise_pred, controls
         torch.cuda.empty_cache()
 
@@ -314,6 +347,10 @@ class MultiVideoTrainer:
             'loss':            total_loss.item(),
             'loss_flow':       loss_flow.item(),
             'loss_weighted':   loss_weighted.item(),
+            'loss_temporal':   loss_temporal.item(),
+            'loss_temporal_weighted': (
+                w_temporal * loss_temporal
+            ).item(),
             'adherence_delta': 0.0,   
             'lr_adapter':      self.optimizer.param_groups[0]['lr'],
             'lr_zero_conv':    self.optimizer.param_groups[1]['lr'],
@@ -331,7 +368,6 @@ class MultiVideoTrainer:
                 loss, metrics = self.train_step(batch)
 
                 loss_scaled = loss / self.config['grad_accum_steps']
-               
                 self.scaler.scale(loss_scaled).backward()
                 epoch_losses.append(metrics['loss'])
 
@@ -441,11 +477,23 @@ class MultiVideoTrainer:
             )
 
         loss_flow = flow_matching_loss(noise_pred, target)
-        loss_weighted = timestep_weighted_flow_loss(noise_pred, target, timesteps)
+        loss_weighted = timestep_weighted_flow_loss(
+            noise_pred, target, timesteps
+        )
+        loss_temporal = temporal_smoothness_loss(noise_pred)
 
         w_flow = self.config.get('loss_flow_weight', 1.0)
-        w_weighted = self.config.get('loss_weighted_weight', 0.1)
-        total_loss = w_flow * loss_flow + w_weighted * loss_weighted
+        w_weighted = self.config.get(
+            'loss_weighted_weight', 0.1
+        )
+        w_temporal = self.config.get(
+            'loss_temporal_weight', 0.05
+        )
+        total_loss = (
+            w_flow * loss_flow
+            + w_weighted * loss_weighted
+            + w_temporal * loss_temporal
+        )
 
         del noisy, noise_pred, controls
 
@@ -453,6 +501,10 @@ class MultiVideoTrainer:
             'loss': total_loss.item(),
             'loss_flow': loss_flow.item(),
             'loss_weighted': loss_weighted.item(),
+            'loss_temporal': loss_temporal.item(),
+            'loss_temporal_weighted': (
+                w_temporal * loss_temporal
+            ).item(),
         }
 
     @torch.no_grad()
@@ -500,7 +552,7 @@ def main():
         'grad_accum_steps': 8,
         'mixed_precision':  True,
 
-        'num_frames':       4,
+        'num_frames':       8,
         'resolution':       (128, 128),
         'control_resolution': (16, 16),
 
@@ -510,14 +562,15 @@ def main():
 
         'loss_flow_weight':      1.0,
         'loss_weighted_weight':  0.1,
+        'loss_temporal_weight':  0.05,
         'loss_adherence_weight': 0.00,  
         'log_every':   10,
-        'save_every':  1000,
+        'save_every':  100,
         'val_every':   500,
 
-        'checkpoint_dir':  'checkpoints/multi_video',
-        'data_dir':        '/mnt/d1/controllable-generation',
-        'checkpoint_path': 'Wan2.2/Wan2.2-TI2V-5B',
+        'checkpoint_dir':  '/mnt/d1/jedidiah/checkpoints/depth_grid_fixed_docx',
+        'data_dir':        '/mnt/d1/jedidiah/data_depth_repro_docx',
+        'checkpoint_path': '/mnt/d1/jedidiah/models/Wan2.2-TI2V-5B',
     }
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -582,7 +635,7 @@ def main():
 
     with torch.no_grad():
         trainer.base_model.control_adapter.modality_gates.copy_(
-        torch.randn(6) * 0.1
+        torch.randn(1) * 0.1
     )
     print("Gates reset:", torch.sigmoid(trainer.base_model.control_adapter.modality_gates))
 
