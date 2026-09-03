@@ -98,14 +98,6 @@ class MultiVideoTrainer:
         self.config       = config
         self.device       = device
 
-        # if torch.cuda.device_count() > 1:
-        #     print(f"\n  Using {torch.cuda.device_count()} GPUs!")
-        #     self.model      = nn.DataParallel(model)
-        #     self.base_model = model
-        # else:
-        #     print("\n  Single GPU detected")
-        #     self.model      = model
-        #     self.base_model = model
         print(f"\n  GPUs: {torch.cuda.device_count()} (cuda:0=WAN+adapter, cuda:1=VAE)")
         self.model = model
         self.base_model = model
@@ -279,7 +271,6 @@ class MultiVideoTrainer:
         controls = {k: v.to(self.device) for k, v in batch['controls'].items()}
         active_controls = ['depth_encoded']
         controls = {k: v for k, v in controls.items() if k in active_controls}
-        # text_embeddings = batch['caption'].to(self.device)
         caption = batch['caption']
         if isinstance(caption, torch.Tensor):
             text_embeddings = caption.to(self.device)
@@ -291,7 +282,6 @@ class MultiVideoTrainer:
             latent = self.base_model.encode_video(video)
         del video
 
-        print(f"  latent shape: {latent.shape}")
         torch.cuda.empty_cache()
 
         B = latent.shape[0]

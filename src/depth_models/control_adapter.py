@@ -4,14 +4,12 @@ import torch.nn.functional as F
 
 
 class ControlAdapter(nn.Module):
-    
-
     def __init__(
         self,
         control_dim: int = 256,
         hidden_dim: int = 512,
         dit_dim: int = 2048,
-        num_controls: int = 6,
+        num_controls: int = 1,
         use_gradient_checkpointing: bool = False,
     ):
         super().__init__()
@@ -42,8 +40,6 @@ class ControlAdapter(nn.Module):
             hidden_dim, hidden_dim,
             kernel_size=3, padding=1, groups=hidden_dim
         )
-
-        # self.modality_gates = nn.Parameter(torch.ones(num_controls))
 
         self.modality_gates = nn.Parameter(torch.randn(num_controls) * 0.1)
 
@@ -109,7 +105,6 @@ class ControlAdapter(nn.Module):
             proj = self.temporal_smooth(proj.float())  # smooth across sequence
             proj = proj.permute(0, 2, 1)              # (B, T*16*16, hidden)
             projected.append(proj * gate)
-            # projected.append(proj * gate)
 
         
         combined = torch.cat(projected, dim=-1) 
@@ -124,26 +119,7 @@ class ControlAdapter(nn.Module):
         return control_signal
 
     def get_modality_weights(self) -> dict:
-        """Inspect learned modality importance (for logging/debugging)."""
+        """Return the learned depth-control gate for training metrics."""
         gates = torch.sigmoid(self.modality_gates).detach().cpu()
         modalities = ['depth']
-        # modalities = ['depth', 'mask', 'motion', 'pose', 'sketch', 'style']
         return {mod: float(gates[i]) for i, mod in enumerate(modalities)}
-
-
-if __name__ == '__main__':
-    adapter = ControlAdapter()
-
-    B, T, H, W = 1, 8, 64, 64
-    dummy_controls = {
-        'depth_encoded':  torch.randn(B, 256, T, H, W),
-        'mask_encoded':   torch.randn(B, 256, T, H, W),
-        'motion_encoded': torch.randn(B, 256, T, H, W),
-        'pose_encoded':   torch.randn(B, 256, T, H, W),
-        'sketch_encoded': torch.randn(B, 256, T, H, W),
-        'style_encoded':  torch.randn(B, 256, T, H, W),
-    }
-
-    output = adapter(dummy_controls)
-    print(f"Input:  {B} × {T}×{H}×{W} × 256")
-    print(f"Output: {output.shape}")  

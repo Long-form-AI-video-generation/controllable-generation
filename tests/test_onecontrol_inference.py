@@ -99,12 +99,12 @@ def extract_depth_sequence(
             continue
         depths.append(extract_depth_frame(frame, midas, tf, device, midas_hw, control_hw))
     cap.release()
-    return np.stack(depths) 
+    return np.stack(depths)
 
 def depth_to_control_tensor(depth_seq, device):
     """(T, H, W) → (1, 256, T, H, W) float32"""
     t = torch.from_numpy(depth_seq).float()
-    t = t.unsqueeze(0).unsqueeze(0)           
+    t = t.unsqueeze(0).unsqueeze(0)
     t = t.expand(-1, 256, -1, -1, -1).clone()
     return t.to(device)
 
@@ -344,7 +344,6 @@ def main():
 
     cfg = WAN_CONFIGS['ti2v-5B']
 
-   
     print("[1/4] Extracting depth from reference video...")
     midas, midas_tf = load_midas(
         device=device,
@@ -371,7 +370,6 @@ def main():
         device_id=0,
         rank=0,
         t5_cpu=True,
-       
     )
 
     print("  Freeing pipeline vanilla DiT before loading ControllableWAN...")
@@ -441,7 +439,6 @@ def main():
     torch.cuda.empty_cache()
     gc.collect()
 
-    
     print("\n" + "-"*60)
     print("Run B — CONTROLLED  (depth adapter active)")
     print("-"*60)
@@ -526,7 +523,6 @@ def main():
 
     deactivate_adapter(ctrl_model)
 
-    
     print("\n" + "="*70)
     print("Done")
     print(f"  base.mp4        : {path_base}")

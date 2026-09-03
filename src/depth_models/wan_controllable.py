@@ -138,7 +138,7 @@ class ControllableWAN(nn.Module):
         B, L, C = x.shape
         hook_idx = self._block_to_hook_idx[id(module)]
         zero_conv = self.zero_convs[hook_idx]
-        ctrl = self._control_signal  
+        ctrl = self._control_signal
 
         if ctrl.shape[1] != L:
             B_c, S_c, C_c = ctrl.shape
@@ -185,7 +185,6 @@ class ControllableWAN(nn.Module):
 
         ctrl = zero_conv(ctrl)
 
-     
         x_norm = x.norm(dim=-1, keepdim=True).mean()
         ctrl_norm = ctrl.norm(dim=-1, keepdim=True).mean()
         if ctrl_norm > 0:
@@ -269,8 +268,6 @@ class ControllableWAN(nn.Module):
         for param in wan.parameters():
             param.requires_grad = False
 
-        
-
         print(f"   WAN loaded ({model_config.get('num_layers', 32)} layers)")
         return wan
 
@@ -352,7 +349,6 @@ class ControllableWAN(nn.Module):
 
         if control_features is not None:
             t0 = time.time()
-            # controls_device = {k: v.to(self.device) for k, v in control_features.items()}
             controls_device = control_features
             print(f"  Control move:    {time.time() - t0:.1f}s")
 
@@ -379,7 +375,6 @@ class ControllableWAN(nn.Module):
 
 
         t0 = time.time()
-        print('encoding text')
         if isinstance(prompts, torch.Tensor):
           
             text_embeddings = [prompts[i].to(self.device, dtype=torch.float32) 
@@ -403,7 +398,6 @@ class ControllableWAN(nn.Module):
      
         seq_len_actual = patch_t * patch_h * patch_w
         seq_len = ((seq_len_actual + 63) // 64) * 64
-        print(seq_len, 'seq len')
         t0 = time.time()
        
         noise_pred = self.wan(
@@ -440,57 +434,3 @@ class ControllableWAN(nn.Module):
             {'params': list(self.zero_convs.parameters()), 'name': 'zero_convs'},
             {'params': gate_params,             'name': 'modality_gates'},
         ]
-
-
-
-def test_controllable_wan():
-    print("\n" + "=" * 70)
-    print("Testing Controllable WAN  (zero-conv injection)")
-    print("=" * 70)
-
-    model = ControllableWAN(
-        checkpoint_dir='Wan2.2/Wan2.2-TI2V-5B',
-        device='cuda',
-    )
-
-    B = 1
-    latent = torch.randn(B, 48, 8, 32, 32).cuda()
-    timesteps = torch.randint(0, 1000, (B,)).cuda()
-    prompts = ["A cat playing with a ball"]
-
-    controls = {
-        'depth_encoded':  torch.randn(B, 256, 8, 128, 128).cuda(),
-        'sketch_encoded': torch.randn(B, 256, 8, 128, 128).cuda(),
-        'motion_encoded': torch.randn(B, 256, 8, 128, 128).cuda(),
-        'style_encoded':  torch.randn(B, 256, 8,  32,  32).cuda(),
-        'pose_encoded':   torch.randn(B, 256, 8, 128, 128).cuda(),
-        'mask_encoded':   torch.randn(B, 256, 8, 128, 128).cuda(),
-    }
-
-  
-    print("\nVerifying zero-conv guarantee...")
-    ctrl_signal = model.control_adapter(
-        {k: v.to(model.device) for k, v in controls.items()}
-    )
-    for i, zc in enumerate(model.zero_convs):
-        out = zc(ctrl_signal)
-        assert out.abs().max().item() == 0.0, f"zero_conv[{i}] is not zero at init!"
-    print("  ✓  All zero convs output exactly 0.0 at initialisation")
-
-    print("\nTesting forward pass...")
-    with torch.no_grad():
-        output = model(latent, timesteps, prompts, controls)
-
-    total_trainable = sum(p.numel() for p in model.get_trainable_parameters())
-    zc_trainable    = sum(p.numel() for p in model.zero_convs.parameters())
-
-    print(f"\nForward pass successful!")
-    print(f"  Input latent:          {latent.shape}")
-    print(f"  Output:                {output.shape}")
-    print(f"  Trainable total:       {total_trainable:,}")
-    print(f"    — ControlAdapter:    {total_trainable - zc_trainable:,}")
-    print(f"    — Zero convs:        {zc_trainable:,}  ({len(model.zero_convs)} × {zc_trainable // len(model.zero_convs):,})")
-
-
-if __name__ == '__main__':
-    test_controllable_wan()
