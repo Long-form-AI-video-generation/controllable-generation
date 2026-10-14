@@ -110,6 +110,15 @@ def _fail(path: str, message: str) -> None:
     raise PoseRecordValidationError(f"{path}: {message}")
 
 
+def _short_repr(value: Any, limit: int = 40) -> str:
+    # repr() of an int with thousands of digits raises ValueError on Python 3.11+.
+    try:
+        text = repr(value)
+    except (ValueError, RecursionError):
+        return f"<{type(value).__name__} too large to display>"
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
 def _require_object(value: Any, keys: frozenset[str], path: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         _fail(path, f"must be an object, got {type(value).__name__}")
@@ -130,33 +139,33 @@ def _require_list(value: Any, path: str) -> list[Any]:
 
 def _require_literal(value: Any, expected: str, path: str) -> None:
     if not isinstance(value, str) or value != expected:
-        _fail(path, f"must be exactly {expected!r}, got {value!r}")
+        _fail(path, f"must be exactly {expected!r}, got {_short_repr(value)}")
 
 
 def _require_choice(value: Any, choices: Iterable[str], path: str) -> str:
     choices = tuple(choices)
     if not isinstance(value, str) or value not in choices:
-        _fail(path, f"must be one of {list(choices)}, got {value!r}")
+        _fail(path, f"must be one of {list(choices)}, got {_short_repr(value)}")
     return value
 
 
 def _require_nonempty_str(value: Any, path: str) -> str:
     if not isinstance(value, str) or not value:
-        _fail(path, f"must be a nonempty string, got {value!r}")
+        _fail(path, f"must be a nonempty string, got {_short_repr(value)}")
     return value
 
 
 def _require_sha256(value: Any, path: str) -> None:
     if not isinstance(value, str) or not _SHA256_PATTERN.fullmatch(value):
-        _fail(path, f"must be a 64-character lowercase hex SHA-256, got {value!r}")
+        _fail(path, f"must be a 64-character lowercase hex SHA-256, got {_short_repr(value)}")
 
 
 def _require_int(value: Any, path: str, minimum: int | None = None) -> int:
     # ``bool`` is a subclass of ``int``; the contract rejects it as a number.
     if type(value) is not int:
-        _fail(path, f"must be an integer, got {value!r}")
+        _fail(path, f"must be an integer, got {_short_repr(value)}")
     if minimum is not None and value < minimum:
-        _fail(path, f"must be >= {minimum}, got {value}")
+        _fail(path, f"must be >= {minimum}, got {_short_repr(value)}")
     return value
 
 
@@ -167,11 +176,12 @@ def _require_number(
     high: float | None = None,
 ) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        _fail(path, f"must be a number, got {value!r}")
-    if not math.isfinite(value):
+        _fail(path, f"must be a number, got {_short_repr(value)}")
+    # Only floats can be NaN/inf; math.isfinite would overflow on huge ints.
+    if isinstance(value, float) and not math.isfinite(value):
         _fail(path, f"must be finite, got {value!r}")
     if (low is not None and value < low) or (high is not None and value > high):
-        _fail(path, f"must be in [{low}, {high}], got {value!r}")
+        _fail(path, f"must be in [{low}, {high}], got {_short_repr(value)}")
     return value
 
 
@@ -187,7 +197,7 @@ def _validate_source(source: Any) -> Mapping[str, Any]:
     _require_int(source["frame_count"], "source.frame_count", minimum=1)
     fps = _require_number(source["fps"], "source.fps")
     if fps <= 0:
-        _fail("source.fps", f"must be positive, got {fps!r}")
+        _fail("source.fps", f"must be positive, got {_short_repr(fps)}")
     _require_literal(source["timing"], TIMING, "source.timing")
     return source
 
@@ -245,7 +255,7 @@ def _validate_joint(joint: Any, path: str, selected: bool, threshold: float) -> 
 
     valid = joint["valid"]
     if type(valid) is not bool:
-        _fail(f"{path}.valid", f"must be a boolean, got {valid!r}")
+        _fail(f"{path}.valid", f"must be a boolean, got {_short_repr(valid)}")
 
     if selected:
         expected = xy is not None and confidence is not None and confidence >= threshold
@@ -349,7 +359,8 @@ def validate_pose_record(record: Any) -> None:
                     f"{path}.source_frame_index",
                     f"must be nondecreasing, got {index} after {previous_index}",
                 )
-            # Indices are nondecreasing, so repeats are always adjacent.
+            # Indices are nondecreasing, so repeats are always adjacent.  Values
+            # compare as JSON numbers, so 1 and 1.0 are the same observation.
             if index == previous_index and frame != previous:
                 _fail(
                     path,
@@ -363,7 +374,11 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise PoseRecordValidationError(f"duplicate JSON object key {key!r}")
+            # The hook has no path, so name the object by its keys instead.
+            keys = list(dict.fromkeys(name for name, _ in pairs))
+            raise PoseRecordValidationError(
+                f"duplicate JSON object key {key!r} in object with keys {keys}"
+            )
         result[key] = value
     return result
 
@@ -402,6 +417,9 @@ def load_pose_record(path: str | os.PathLike[str]) -> dict[str, Any]:
         raise PoseRecordValidationError(
             f"{location}: invalid JSON at line {error.lineno} column {error.colno}: {error.msg}"
         ) from error
+    except (ValueError, RecursionError) as error:
+        # e.g. integers beyond Python's digit limit, or extremely deep nesting.
+        raise PoseRecordValidationError(f"{location}: invalid JSON: {error}") from error
 
     try:
         validate_pose_record(record)

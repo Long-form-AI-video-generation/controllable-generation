@@ -16,6 +16,7 @@ import copy
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -372,9 +373,31 @@ class HeaderTests(_RecordTestCase):
             (("source", "frame_count"), 1),
             (("sampling", "num_frames"), 1),
         ):
+            field = re.escape(".".join(keys))
             for value in (True, "832", 832.0, None, minimum - 1):
                 with self.subTest(field=keys, value=value):
-                    self.assertRejected(_set(*keys, value=value), r"must be (an integer|>=)")
+                    self.assertRejected(
+                        _set(*keys, value=value), rf"^{field}: must be (an integer|>=)"
+                    )
+
+    def test_huge_integers_are_judged_without_crashing(self) -> None:
+        huge = 10**400
+        too_many_digits = 10**5000  # repr() of this raises ValueError
+        self.assertAccepted(_set("source", "fps", value=huge))
+        self.assertAccepted(lambda r: r["source"].update(width=huge, height=too_many_digits))
+        cases: dict[str, tuple[Mutation, str]] = {
+            "threshold": (
+                _set("extraction", "validity_threshold", value=huge),
+                r"extraction\.validity_threshold: must be in",
+            ),
+            "confidence": (_joint0("confidence", too_many_digits), r"confidence: must be in"),
+            "coordinate": (_joint0("xy", [0.5, huge]), r"xy\[1\]: must be in"),
+            "negative fps": (_set("source", "fps", value=-too_many_digits), r"source\.fps: must be positive"),
+            "identifier": (_set("source", "video_id", value=too_many_digits), "too large to display"),
+        }
+        for name, (mutation, pattern) in cases.items():
+            with self.subTest(case=name):
+                self.assertRejected(mutation, pattern)
 
     def test_fps_must_be_finite_and_positive(self) -> None:
         for value in (0, -16.0, float("nan"), float("inf"), True, "16"):
@@ -586,19 +609,51 @@ class LoadPoseRecordTests(unittest.TestCase):
         with self.assertRaisesRegex(PoseRecordValidationError, r"source\.fps: must be finite"):
             load_pose_record(self._write(text))
 
+    def test_huge_integer_literals_are_handled(self) -> None:
+        text = json.dumps(_record())
+        accepted = text.replace('"fps": 16.0', '"fps": 1' + "0" * 400, 1)
+        self.assertEqual(load_pose_record(self._write(accepted))["source"]["fps"], 10**400)
+
+        rejected = text.replace('"confidence": 0.9', '"confidence": 1' + "0" * 400, 1)
+        with self.assertRaisesRegex(PoseRecordValidationError, r"confidence: must be in"):
+            load_pose_record(self._write(rejected))
+
+    def test_json_beyond_parser_limits_raises_validation_errors(self) -> None:
+        cases = {
+            # Python refuses to parse integers with more than 4300 digits.
+            "too many digits": json.dumps(_record()).replace(
+                '"width": 832', '"width": 1' + "0" * 5000, 1
+            ),
+            "deep nesting": "[" * 100_000 + "]" * 100_000,
+        }
+        for name, content in cases.items():
+            with self.subTest(case=name):
+                path = self._write(content)
+                with self.assertRaisesRegex(PoseRecordValidationError, "invalid JSON") as raised:
+                    load_pose_record(path)
+                self.assertIn(str(path), str(raised.exception))
+
     def test_duplicate_keys_are_rejected(self) -> None:
         text = json.dumps(_record())
         cases = {
-            "top level": text.replace(
-                '"schema_version": "pose-pilot-v1"',
-                '"schema_version": "pose-pilot-v0", "schema_version": "pose-pilot-v1"',
-                1,
+            "top level": (
+                text.replace(
+                    '"schema_version": "pose-pilot-v1"',
+                    '"schema_version": "pose-pilot-v0", "schema_version": "pose-pilot-v1"',
+                    1,
+                ),
+                r"duplicate JSON object key 'schema_version' in object with keys "
+                r"\['schema_version', 'joint_names',",
             ),
-            "joint": text.replace('"valid": true', '"valid": false, "valid": true', 1),
+            "joint": (
+                text.replace('"valid": true', '"valid": false, "valid": true', 1),
+                r"duplicate JSON object key 'valid' in object with keys "
+                r"\['xy', 'confidence', 'valid'\]",
+            ),
         }
-        for name, content in cases.items():
+        for name, (content, pattern) in cases.items():
             with self.subTest(location=name):
-                with self.assertRaisesRegex(PoseRecordValidationError, "duplicate JSON object key"):
+                with self.assertRaisesRegex(PoseRecordValidationError, pattern):
                     load_pose_record(self._write(content))
 
     def test_file_and_json_errors_raise_validation_errors(self) -> None:
