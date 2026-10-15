@@ -1,245 +1,235 @@
-# Controllable WAN — Depth & Multi-Modal Video Generation
+# Controllable Video Generation with WAN 2.2
 
-A ControlNet-style adapter for **WAN 2.2 TI2V-5B** that enables controllable video generation using up to 6 control modalities (depth, sketch, motion, style, pose, mask). The adapter is trained on top of the frozen WAN backbone using zero-convolution injection ,meaning the pretrained model's behavior is fully preserved at initialization and controls are introduced gradually during training.
+This repository implements **Experiment B**, a ControlNet-style extension for
+WAN 2.2 TI2V-5B. Depth, Canny edge, and semantic mask are trained as independent
+control experts and can be composed at inference time through one frozen WAN
+backbone.
 
+The WAN DiT, VAE, and T5 encoder remain frozen. Each expert learns a lightweight
+adapter and zero-initialized residual projections, allowing control influence to
+grow without changing the pretrained model at initialization.
 
+## Project status
 
----
+| Control | Preparation | Training | Standalone inference | Combined inference |
+|---|---:|---:|---:|---:|
+| Depth | Complete | Complete | Validated | Validated |
+| Canny edge | Complete | Complete | Validated | Validated |
+| Semantic mask | Complete | Complete | Validated | Validated |
 
-## Architecture Overview
+The validated three-control setting is depth `0.25`, Canny `0.25`, and mask
+`0.25`, with a combined residual-ratio cap of `0.1`. A strength of `0.5` remains
+the standalone default for each validated expert.
 
-```
-Reference Video
-    │
-    ▼
-EnhancedControlExtractor          ← MiDaS, Canny, Farneback, CLIP, YOLO/MediaPipe, SAM/DeepLab
-    │
-    ▼
-ControlEncoderProcessor           ← 6 lightweight CNN encoders → 256-dim feature volumes
-    │                                (depth, sketch, motion, style, pose, mask)
-    ▼
-ControlAdapter
-    ├── per-modality projection   ← Linear → SiLU → LayerNorm  (one per modality)
-    ├── modality_gates            ← 6 learned sigmoid scalars (which modalities matter)
-    └── fusion layer              ← concat → Linear → SiLU → LayerNorm → (B, T×16×16, dit_dim)
-    │
-    ▼
-ZeroLinear × 4                    ← zero-initialized projections, one per injection layer
-    │
-    ▼
-WAN 2.2 DiT (frozen)
-    ├── Block 0   ← pre-hook: x = x + zero_conv[0](ctrl)
-    ├── ...
-    ├── Block 8   ← pre-hook: x = x + zero_conv[1](ctrl)
-    ├── ...
-    ├── Block 16  ← pre-hook: x = x + zero_conv[2](ctrl)
-    ├── ...
-    └── Block 24  ← pre-hook: x = x + zero_conv[3](ctrl)
-    │
-    ▼
-noise_pred → denoised video
+## Architecture
+
+```text
+Reference video
+      |
+      +--> MiDaS depth --------> depth expert ---+
+      +--> Canny edges --------> Canny expert ---+--> normalized, capped residuals
+      +--> SegFormer-B5 masks -> mask expert ----+              |
+                                                                v
+Reference image + prompt ------------------------------> frozen WAN 2.2 DiT
+                                                                |
+                                                                v
+                                                        generated video
 ```
 
-**Trainable parameters only:** ControlAdapter + 4 ZeroLinear layers (~tens of millions). WAN, VAE, and T5 are fully frozen throughout training.
+Each expert is trained separately and retains its own checkpoint. During
+combined inference, `MultiControlHookController` attaches the requested experts
+to the same WAN DiT blocks. Expert strengths are independent; residual
+normalization and the combined cap prevent accumulated control pressure from
+overwhelming the base model.
 
----
+## Repository layout
 
-## Project Structure
-
-```
-.
-├── Wan2.2/                         # WAN 2.2 submodule (TI2V-5B weights + model code)
-│   └── Wan2.2-TI2V-5B/
-│       ├── config.json
-│       ├── diffusion_pytorch_model.safetensors.index.json
-│       ├── Wan2.2_VAE.pth
-│       └── models_t5_umt5-xxl-enc-bf16.pth
-│
-├── models/                         # Pretrained weights for control extractors
-│   ├── midas_v3_dpt_large.pth
-│   ├── open_clip_pytorch_model.bin
-│   ├── table5_pidinet.pth          # optional, falls back to Canny
-│   └── sam_vit_h_4b8939.pth       # optional, falls back to DeepLabV3
-│
-├── src/
-│   ├── data/
-│   │   ├── dataset.py              # ControllableVideoDataset
-│   │   └── extract_control.py      # EnhancedControlExtractor + process_shot_with_all_controls
-│   │
-│   └── models/
-│       ├── control_adapter.py      # ControlAdapter 
-│       ├── wan_controllable.py     # ControllableWAN 
-│       └── encode_controls.py      # ControlEncoderProcessor 
-        └── train.py                # Training entry point (MultiVideoTrainer)
-│
-├── tests/test-allcontrols.py         # Inference + side-by-side comparison output
-└── checkpoints/
-    └── multi_video/
-        ├── checkpoint_best.pt
-        ├── checkpoint_step_*.pt
-        └── training_log.jsonl
+```text
+src/
+  data/                 Shared dataset and frame-sampling contracts
+  depth_models/         Depth preprocessing, adapter, trainer, and WAN wrapper
+  sketch_models/        Canny preprocessing, adapter, training, and evaluation
+  mask_models/          SegFormer mask pipeline, training, and evaluation
+  control_integration/  Shared preparation, checkpoint loading, and fusion
+tests/
+  test_onecontrol_inference.py       Depth inference runner
+  test_sketch_inference.py           Canny inference runner
+  test_mask_inference.py             Mask inference runner
+  prepare_multi_control_inputs.py    Matched multi-control preparation
+  test_multi_control_inference.py    One-WAN combined inference runner
 ```
 
----
+`Wan2.2/`, model weights, datasets, checkpoints, and generated outputs are kept
+outside version control.
 
-## Requirements
+## Environment
 
-```
-torch >= 2.1
-diffusers
-transformers
-safetensors
-opencv-python
-mediapipe
-ultralytics          # YOLOv8 pose (falls back to MediaPipe if unavailable)
-segment-anything     # SAM (falls back to DeepLabV3 if unavailable)
-tqdm
-numpy
-Pillow
-```
-
-WAN 2.2 dependencies (inside `Wan2.2/`):
-```
-pip install -e Wan2.2/
-```
-
----
-
-## Setup
-
-**1. Clone and install**
-```bash
-git clone <repo-url>
-cd controllable-generation
-pip install -r requirements.txt
-pip install -e Wan2.2/
-```
-
-**2. Download WAN 2.2 TI2V-5B weights**
-
-Place the following files under `Wan2.2/Wan2.2-TI2V-5B/`:
-- `config.json`
-- `diffusion_pytorch_model.safetensors.index.json` + shards
-- `Wan2.2_VAE.pth`
-- `models_t5_umt5-xxl-enc-bf16.pth`
-
-**3. Download control extractor weights**
-
-Place under `models/`:
-- `midas_v3_dpt_large.pth` — depth estimation ([MiDaS](https://github.com/isl-org/MiDaS))
-- `open_clip_pytorch_model.bin` — style encoding ([OpenCLIP](https://github.com/mlfoundations/open_clip))
-- `sam_vit_h_4b8939.pth` — segmentation masks ([SAM](https://github.com/facebookresearch/segment-anything)) *(optional)*
-
----
-
-## Data Preparation
-
-**Step 1 — Extract raw control signals from your video dataset**
-```bash
-python src/data/extract_control.py \
-    --videos_dir   /data/videos \
-    --shots_json   /data/shots_metadata.json \
-    --output_dir   /data/control_signals
-```
-
-This runs MiDaS (depth), Canny (sketch/edges), Farneback (optical flow), CLIP (style), YOLO/MediaPipe (pose), and SAM/DeepLabV3 (masks) on every shot and saves `.npz` files per shot.
-
-**Step 2 — Encode raw signals into 256-dim feature volumes**
-```bash
-python src/models/encode_controls.py \
-    --control_dir  /data/control_signals \
-    --output_dir   /data/encoded_controls \
-    --num_frames   8 \
-    --resolution   256 256
-```
-
-Each output `*_encoded.npz` contains 6 keys: `depth_encoded`, `sketch_encoded`, `motion_encoded`, `style_encoded`, `pose_encoded`, `mask_encoded` — all shaped `(1, 256, T, H, W)` in float16.
-
-**Expected dataset layout after both steps:**
-```
-/data/
-├── videos/
-│   └── <video_id>.mp4
-├── shots_metadata.json
-├── control_signals/
-│   └── <video_id>/shot_<id>_controls.npz
-└── encoded_controls/
-    └── <video_id>/shot_<id>_controls_encoded.npz
-```
-
----
-
-## Training
+Run commands from the repository root:
 
 ```bash
-python src/models/train.py
+export PYTHONPATH="$PWD/src:$PWD/Wan2.2:$PWD"
 ```
 
-Key config values (edit inside `main()` in `train_multi_video.py`):
+The current WAN wrappers expect two CUDA devices:
 
-| Parameter | Default | Notes |
-|---|---|---|
-| `num_frames` | 4 | Frames per training clip — increase once pipeline is stable |
-| `resolution` | (128, 128) | Spatial resolution of training latents |
-| `lr` | 1e-4 | Base adapter learning rate |
-| `grad_accum_steps` | 8 | Effective batch = batch_size × grad_accum_steps |
-| `loss_flow_weight` | 1.0 | Weight on standard flow-matching MSE loss |
-| `loss_weighted_weight` | 0.1 | Weight on timestep-weighted flow loss |
-| `checkpoint_dir` | `checkpoints/multi_video` | Where to save |
-| `data_dir` | `/mnt/d1/controllable-generation` | Root of prepared dataset |
+- `cuda:0`: WAN generation workload
+- `cuda:1`: VAE or control-expert workload, depending on the entry point
 
-**Resuming:** On startup the script scans `checkpoint_dir` for the latest `.pt` file and prompts to resume.
+The repository does not currently provide a single dependency lock file. The
+runtime requires PyTorch, OpenCV, NumPy, Pillow, Diffusers, Transformers,
+Safetensors, tqdm, the local WAN 2.2 package, MiDaS for depth, and SegFormer-B5
+for semantic masks.
 
-**What to monitor in `training_log.jsonl`:**
+## Dataset contract
 
-| Metric | Healthy range | Action if wrong |
-|---|---|---|
-| `zero_conv_mean_weight_norm` | Starts at 0, slowly rises | If stuck at 0 after 500 steps → gradient not flowing |
-| `zero_conv_max_weight_norm` | Should not exceed ~0.1 in first 100 steps | If it does → LR too high |
-| `gate_depth` → `gate_style` | Should diverge from 0.5 over time | If all stay at 0.5 → gates not learning |
-| `loss` | Should decrease steadily | Plateau early → check data pipeline |
+Experiments use the validated 524-video AnimeShooter dataset and a frozen
+`314/105/105` train, validation, and test split. Reuse the same split manifest
+for every expert so results remain comparable.
 
-**GPU layout:** Designed for dual-GPU setups.
-- `cuda:0` — WAN DiT + ControlAdapter + ZeroConvs
-- `cuda:1` — VAE encoder/decoder + T5 text encoder + control encoders
+Prepared control files are compressed NumPy archives with one canonical key:
 
-Single-GPU is possible but requires careful memory management (reduce `num_frames` and `resolution`).
+- Depth: `depth_encoded`
+- Canny: `sketch_encoded`
+- Mask: `mask_encoded`
 
----
+Training should use strict dataset loading and the preprocessing manifest
+created with each control dataset.
 
-## Inference
+## Prepare training controls
+
+### Depth
+
+Convert raw MiDaS depth arrays into the depth training contract:
 
 ```bash
-python tests/test-allcontrols.py \
-    --checkpoint  checkpoints/multi_video/checkpoint_best.pt \
-    --ref_video   /path/to/reference.mp4 \
-    --ref_image   /path/to/first_frame.png \
-    --prompt     "An anime character in a dramatic scene" \
-    --output      result \
-    --steps       50 \
-    --size        480*832
+python src/depth_models/depth_control.py \
+  --control_dir <raw-control-directory> \
+  --output_dir <depth-output-directory> \
+  --num_frames 8
 ```
 
-This produces **three files**:
-- `base_output.mp4` — generation with no controls (frozen WAN only)
-- `controlled_output.mp4` — generation with all 6 controls injected
-- `comparison.mp4` — side-by-side with labels burned in
+### Canny edge
 
+```bash
+python -m src.sketch_models.prepare_dataset \
+  --videos-dir <video-directory> \
+  --metadata <shots-metadata.json> \
+  --output-dir <canny-output-directory> \
+  --num-frames 8 \
+  --height 128 \
+  --width 128
+```
 
+### Semantic mask
 
-## Checkpoints
+```bash
+python -m src.mask_models.prepare_dataset \
+  --videos-dir <video-directory> \
+  --metadata <shots-metadata.json> \
+  --output-dir <mask-output-directory> \
+  --num-frames 8 \
+  --height 128 \
+  --width 128 \
+  --device cuda:0 \
+  --cache-dir <segformer-cache-directory>
+```
 
-Checkpoints saved by the trainer contain:
+Use `--allow-download` only when downloading the pinned SegFormer files is
+intended. Otherwise, preprocessing requires the model to exist in the supplied
+cache.
 
-```python
-{
-    'model':        control_adapter.state_dict(),   # ControlAdapter weights
-    'zero_convs':   zero_convs.state_dict(),        # 4 × ZeroLinear weights
-    'optimizer':    ...,
-    'lr_scheduler': ...,
-    'scaler':       ...,
-    'global_step':  int,
-    'epoch':        int,
-    'best_val_loss': float,
-    'config':       dict,
-}
+## Train standalone experts
+
+Depth configuration is currently defined in `src/depth_models/train.py`:
+
+```bash
+python src/depth_models/train.py
+```
+
+Canny and mask trainers use explicit paths and validate their manifests:
+
+```bash
+python -m src.sketch_models.train \
+  --data-dir <dataset-root> \
+  --checkpoint-dir <canny-checkpoint-directory> \
+  --wan-dir <WAN-directory> \
+  --split-manifest <split-manifest.json> \
+  --preprocessing-manifest <sketch-preprocessing-manifest.json>
+
+python -m src.mask_models.train \
+  --data-dir <dataset-root> \
+  --checkpoint-dir <mask-checkpoint-directory> \
+  --wan-dir <WAN-directory> \
+  --split-manifest <split-manifest.json> \
+  --preprocessing-manifest <mask-preprocessing-manifest.json>
+```
+
+The default Canny and mask schedule is 40 epochs with a maximum of 1,600
+optimizer steps.
+
+## Run combined inference
+
+First create one immutable bundle in which every expert uses the same decoded
+reference frames:
+
+```bash
+python tests/prepare_multi_control_inputs.py \
+  --ref-video <reference.mp4> \
+  --ref-image <target-image.jpg> \
+  --output-dir <prepared-controls-directory> \
+  --frame-num 81 \
+  --experts depth canny mask \
+  --midas-repo <local-MiDaS-repository> \
+  --midas-weights <dpt-large-weights> \
+  --midas-device cuda:0 \
+  --segformer-device cuda:0 \
+  --segformer-cache-dir <segformer-cache-directory>
+```
+
+Then run the base and controlled generations through one WAN pipeline:
+
+```bash
+python tests/test_multi_control_inference.py \
+  --ref-image <target-image.jpg> \
+  --prompt "<generation prompt>" \
+  --prepared-controls-dir <prepared-controls-directory> \
+  --depth-checkpoint <depth-checkpoint.pt> \
+  --canny-checkpoint <canny-checkpoint.pt> \
+  --mask-checkpoint <mask-checkpoint.pt> \
+  --wan-dir <WAN-directory> \
+  --output-dir <output-directory> \
+  --size '480*832' \
+  --frame-num 81 \
+  --steps 20 \
+  --guidance 3.0 \
+  --seed 42 \
+  --fps 16 \
+  --control-combinations depth+canny+mask \
+  --depth-strength 0.25 \
+  --canny-strength 0.25 \
+  --mask-strength 0.25 \
+  --combined-ratio-cap 0.1 \
+  --controller-device cuda:1 \
+  --diagnostics
+```
+
+`frame-num` must be positive and satisfy `4n+1`, such as 17 or 81. The runner
+produces base, controlled, comparison, diagnostic-frame, and metadata artifacts.
+
+## Verification
+
+Run the contract tests before inference:
+
+```bash
+python -m unittest discover -s tests -p 'test_control_integration_*.py' -v
+python -m unittest discover -s tests -p 'test_sketch_*.py' -v
+python -m unittest discover -s tests -p 'test_mask_*.py' -v
+```
+
+## Development workflow
+
+- `main` is the stable reviewed branch.
+- `dev` contains the current integrated implementation.
+- New changes are developed on feature branches created from `dev`.
+- Feature branches merge back into `dev`; validated releases are promoted from
+  `dev` to `main`.
