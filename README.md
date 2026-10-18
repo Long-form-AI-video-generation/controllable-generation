@@ -51,6 +51,7 @@ src/
   sketch_models/        Canny preprocessing, adapter, training, and evaluation
   mask_models/          SegFormer mask pipeline, training, and evaluation
   control_integration/  Shared preparation, checkpoint loading, and fusion
+  pose_models/          Pose record (pose-pilot-v1) validation
 tests/
   test_onecontrol_inference.py       Depth inference runner
   test_sketch_inference.py           Canny inference runner
@@ -224,6 +225,7 @@ Run the contract tests before inference:
 python -m unittest discover -s tests -p 'test_control_integration_*.py' -v
 python -m unittest discover -s tests -p 'test_sketch_*.py' -v
 python -m unittest discover -s tests -p 'test_mask_*.py' -v
+python -m unittest discover -s tests -p 'test_pose_*.py' -v
 ```
 
 ## Development workflow
