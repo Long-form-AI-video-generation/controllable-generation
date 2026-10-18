@@ -382,7 +382,8 @@ class HeaderTests(_RecordTestCase):
 
     def test_huge_integers_are_judged_without_crashing(self) -> None:
         huge = 10**400
-        too_many_digits = 10**5000  # repr() of this raises ValueError
+        # With Python's integer digit limit on, repr() of this raises ValueError.
+        too_many_digits = 10**5000
         self.assertAccepted(_set("source", "fps", value=huge))
         self.assertAccepted(lambda r: r["source"].update(width=huge, height=too_many_digits))
         cases: dict[str, tuple[Mutation, str]] = {
@@ -393,7 +394,12 @@ class HeaderTests(_RecordTestCase):
             "confidence": (_joint0("confidence", too_many_digits), r"confidence: must be in"),
             "coordinate": (_joint0("xy", [0.5, huge]), r"xy\[1\]: must be in"),
             "negative fps": (_set("source", "fps", value=-too_many_digits), r"source\.fps: must be positive"),
-            "identifier": (_set("source", "video_id", value=too_many_digits), "too large to display"),
+            # Shown as a placeholder when repr() fails, otherwise truncated.
+            "identifier": (
+                _set("source", "video_id", value=too_many_digits),
+                r"^source\.video_id: must be a nonempty string, "
+                r"got (<int too large to display>|10{39}\.\.\.)$",
+            ),
         }
         for name, (mutation, pattern) in cases.items():
             with self.subTest(case=name):
@@ -618,20 +624,26 @@ class LoadPoseRecordTests(unittest.TestCase):
         with self.assertRaisesRegex(PoseRecordValidationError, r"confidence: must be in"):
             load_pose_record(self._write(rejected))
 
-    def test_json_beyond_parser_limits_raises_validation_errors(self) -> None:
-        cases = {
-            # Python refuses to parse integers with more than 4300 digits.
-            "too many digits": json.dumps(_record()).replace(
-                '"width": 832', '"width": 1' + "0" * 5000, 1
-            ),
-            "deep nesting": "[" * 100_000 + "]" * 100_000,
-        }
-        for name, content in cases.items():
-            with self.subTest(case=name):
-                path = self._write(content)
-                with self.assertRaisesRegex(PoseRecordValidationError, "invalid JSON") as raised:
-                    load_pose_record(path)
-                self.assertIn(str(path), str(raised.exception))
+    def test_integers_beyond_the_digit_limit(self) -> None:
+        # Python's integer digit limit (default 4300) is missing in older patch
+        # releases and can be disabled with PYTHONINTMAXSTRDIGITS=0.
+        limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        digits = (limit or 4300) + 1
+        text = json.dumps(_record()).replace('"width": 832', '"width": 1' + "0" * (digits - 1), 1)
+        path = self._write(text)
+        if limit:
+            with self.assertRaisesRegex(PoseRecordValidationError, "invalid JSON") as raised:
+                load_pose_record(path)
+            self.assertIn(str(path), str(raised.exception))
+        else:
+            # Without the limit it parses, and a huge width is a valid integer >= 2.
+            self.assertEqual(load_pose_record(path)["source"]["width"], 10 ** (digits - 1))
+
+    def test_extremely_deep_nesting_raises_a_validation_error(self) -> None:
+        path = self._write("[" * 100_000 + "]" * 100_000)
+        with self.assertRaisesRegex(PoseRecordValidationError, "invalid JSON") as raised:
+            load_pose_record(path)
+        self.assertIn(str(path), str(raised.exception))
 
     def test_duplicate_keys_are_rejected(self) -> None:
         text = json.dumps(_record())
