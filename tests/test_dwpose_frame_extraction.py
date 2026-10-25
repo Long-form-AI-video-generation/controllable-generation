@@ -173,7 +173,7 @@ class CoordinateTests(unittest.TestCase):
         output = estimator_output(
             xy=[[20, 5]] + [[10, 10]] * 16,
             coordinate_space="original_pixels",
-            to_original=[[2, 0, 40], [0, 2, 20]],
+            to_original=None,
         )
         wrapper, _, _ = make_wrapper([detection()], [output])
         result = wrapper.extract_frame(make_image())
@@ -294,6 +294,15 @@ class InvalidInputTests(unittest.TestCase):
         with self.assertRaises(PoseExtractionError):
             wrapper.extract_frame(make_image())
 
+    def test_original_pixels_with_non_null_transform_raises(self):
+        output = estimator_output(
+            coordinate_space="original_pixels",
+            to_original=[[2, 0, 40], [0, 2, 20]],
+        )
+        wrapper, _, _ = make_wrapper([detection()], [output])
+        with self.assertRaises(PoseExtractionError):
+            wrapper.extract_frame(make_image())
+
     def test_nonfinite_values_raise(self):
         nan_detector = [detection(score=float("nan"))]
         wrapper, _, _ = make_wrapper(nan_detector, [estimator_output()])
@@ -345,6 +354,49 @@ class InvalidInputTests(unittest.TestCase):
         )
         with self.assertRaises(PoseExtractionError):
             wrapper.extract_frame(make_image())
+
+
+class NumpyArrayHandlingTests(unittest.TestCase):
+    def test_zero_dimensional_arrays_raise_pose_extraction_error(self):
+        # Regression: np.array(1.0) used to leak a raw TypeError from
+        # iteration; it must surface as PoseExtractionError naming the field.
+        # The 0-d values are assigned directly, because the test helper
+        # itself materialises list-valued fields.
+        def with_field(field, value):
+            output = estimator_output()
+            output[field] = value
+            return output
+
+        cases = [
+            ("joint_names", with_field("joint_names", np.array(1.0))),
+            ("xy", with_field("xy", np.array(1.0))),
+            ("scores_raw", with_field("scores_raw", np.array(1.0))),
+            ("to_original", estimator_output(
+                coordinate_space="model_pixels", to_original=np.array(1.0))),
+            ("xy entry", estimator_output(
+                xy=[np.array(1.0)] + [[10, 10]] * 16)),
+            ("to_original row", estimator_output(
+                coordinate_space="model_pixels",
+                to_original=[np.array(1.0), [0, 1, 0]])),
+        ]
+        for label, output in cases:
+            with self.subTest(field=label):
+                wrapper, _, _ = make_wrapper([detection()], [output])
+                with self.assertRaises(PoseExtractionError):
+                    wrapper.extract_frame(make_image())
+
+    def test_correctly_shaped_numpy_arrays_are_supported(self):
+        output = estimator_output(
+            names=np.array(CANONICAL_JOINT_NAMES),
+            xy=np.array([[10, 10]] * 17, dtype=float),
+            scores=np.array([0.5] * 17),
+            coordinate_space="model_pixels",
+            to_original=np.array([[1, 0, 0], [0, 1, 0]]),
+        )
+        wrapper, _, _ = make_wrapper([detection()], [output])
+        result = wrapper.extract_frame(make_image())
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["candidates"][0]["xy_pixels"][0], [10.0, 10.0])
 
 
 class BackendFailureTests(unittest.TestCase):
