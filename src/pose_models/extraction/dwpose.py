@@ -63,7 +63,12 @@ def _as_python_number(value):
 
 
 def _is_sequence(value):
-    return isinstance(value, (list, tuple, np.ndarray))
+    # A zero-dimensional NumPy array is not a sequence: iterating over it
+    # raises a raw TypeError, so it must fail the sequence check and be
+    # reported as a PoseExtractionError naming the field, not crash.
+    if isinstance(value, np.ndarray):
+        return value.ndim >= 1
+    return isinstance(value, (list, tuple))
 
 
 def _validate_box(box, field, width, height):
@@ -316,6 +321,11 @@ class DWPoseFrameExtractor:
             if coordinate_space == "model_pixels" and to_original is None:
                 raise PoseExtractionError(
                     "to_original: a transform is required for model_pixels results"
+                )
+            if coordinate_space == "original_pixels" and to_original is not None:
+                raise PoseExtractionError(
+                    "to_original: must be null when coordinate_space is "
+                    "'original_pixels'"
                 )
             validated.append(
                 {
