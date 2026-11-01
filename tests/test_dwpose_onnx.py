@@ -92,6 +92,44 @@ class DWPoseDetectorTests(unittest.TestCase):
         self.assertAlmostEqual(detections[0]["score_raw"], 0.81, places=6)
         self.assertEqual(session.feed["input"].shape, (1, 3, 32, 32))
 
+    def test_clips_detector_boxes_to_image_boundaries(self):
+        # First candidate decodes to [-4, -4, 12, 12] on a 32x32 image.
+        output = np.zeros((1, 21, 6), dtype=np.float32)
+        output[0, 0] = [0.5, 0.5, np.log(2.0), np.log(2.0), 0.9, 0.9]
+        detector = DWPoseONNXDetector(
+            FakeSession(output), input_size_hw=(32, 32), cv2_module=FakeCV2
+        )
+
+        detections = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0]["box_xyxy"], [0.0, 0.0, 12.0, 12.0])
+
+    def test_clips_detector_boxes_at_right_and_bottom_edges(self):
+        # First candidate decodes to [20, 20, 36, 36] on a 32x32 image.
+        output = np.zeros((1, 21, 6), dtype=np.float32)
+        output[0, 0] = [3.5, 3.5, np.log(2.0), np.log(2.0), 0.9, 0.9]
+        detector = DWPoseONNXDetector(
+            FakeSession(output), input_size_hw=(32, 32), cv2_module=FakeCV2
+        )
+
+        detections = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0]["box_xyxy"], [20.0, 20.0, 32.0, 32.0])
+
+    def test_discards_detector_boxes_outside_image(self):
+        # First candidate decodes to [36, 36, 44, 44], fully outside 32x32.
+        output = np.zeros((1, 21, 6), dtype=np.float32)
+        output[0, 0] = [5.0, 5.0, 0.0, 0.0, 0.9, 0.9]
+        detector = DWPoseONNXDetector(
+            FakeSession(output), input_size_hw=(32, 32), cv2_module=FakeCV2
+        )
+
+        detections = detector.detect(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        self.assertEqual(detections, [])
+
     def test_rejects_invalid_input_image(self):
         detector = DWPoseONNXDetector(
             FakeSession(np.zeros((1, 21, 6), dtype=np.float32)),

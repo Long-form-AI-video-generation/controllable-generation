@@ -351,7 +351,7 @@ class DWPoseONNXDetector:
         self.output_names = [item.name for item in session.get_outputs()]
 
     def detect(self, image: np.ndarray) -> list[dict[str, Any]]:
-        _validate_rgb_image(image)
+        height, width = _validate_rgb_image(image)
         tensor, ratio = _letterbox_top_left(image, self.input_size_hw, self.cv2)
         try:
             outputs = self.session.run(self.output_names or None, {self.input_name: tensor})
@@ -370,7 +370,15 @@ class DWPoseONNXDetector:
             score = float(person_scores[index])
             if score <= self.final_person_score_threshold:
                 continue
+            # YOLOX can predict a box that extends slightly beyond the source
+            # image. Convert to source pixels, clip its edges, and discard boxes
+            # that do not overlap the image. The frame wrapper can then keep its
+            # strict validation for all detector backends.
             box = (boxes[index] / ratio).astype(np.float64)
+            box[[0, 2]] = np.clip(box[[0, 2]], 0.0, float(width))
+            box[[1, 3]] = np.clip(box[[1, 3]], 0.0, float(height))
+            if box[2] <= box[0] or box[3] <= box[1]:
+                continue
             results.append(
                 {"box_xyxy": [float(value) for value in box], "score_raw": score}
             )
