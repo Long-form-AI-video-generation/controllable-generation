@@ -39,6 +39,7 @@ runs/
 tensorboard/
 
 # Outputs
+/artifacts/
 outputs/
 results/
 checkpoints/

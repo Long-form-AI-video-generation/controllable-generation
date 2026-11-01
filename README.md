@@ -226,7 +226,15 @@ python -m unittest discover -s tests -p 'test_control_integration_*.py' -v
 python -m unittest discover -s tests -p 'test_sketch_*.py' -v
 python -m unittest discover -s tests -p 'test_mask_*.py' -v
 python -m unittest discover -s tests -p 'test_pose_*.py' -v
+python -m unittest discover -s tests -p 'test_dwpose_*.py' -v
 ```
+
+The [pose record pipeline](docs/pose/POSE_RECORD_BUILDER.md) joins the reviewed
+frame wrapper, DWPose ONNX backend, and `pose-pilot-v1` validator. Follow the
+[server record smoke check](docs/pose/SERVER_RECORD_SMOKE.md) to build one audited
+record from a selected anime-video frame. Raw DWPose scores can exceed 1; the
+initial check explicitly stores confidence as unavailable and marks every joint
+invalid. Passing schema validation does not make that record training-ready.
 
 ## Development workflow
 
