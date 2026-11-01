@@ -97,10 +97,11 @@ reporting a completed real record.
 
 ## Contributions and remaining work
 
-The validator and its original commit history come from PR #16; the frame wrapper
-was merged in PR #17. The integration PR adds the ONNX backend, boundary fix,
+The validator was merged through PR #16; the frame wrapper was merged in PR #17.
+The integration branch includes the latest dev containing both contributions.
+The integration PR adds the ONNX backend, boundary fix,
 builder, retained fixtures, explicit unavailable-confidence policy, and this
-one-frame audit workflow. It supersedes the separate unmerged validator PR.
+one-frame audit workflow. It builds on the merged validator PR.
 Review and merge the integration through the organization's `dev` branch.
 
 After this pipeline check, resolve confidence representation and visual quality
