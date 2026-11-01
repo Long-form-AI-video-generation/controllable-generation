@@ -202,9 +202,9 @@ def main() -> int:
     print(f"status: {result['status']}")
     print(f"candidates: {len(result['candidates'])}")
     for candidate in result["candidates"]:
-        visible = sum(point is not None for point in candidate["xy_pixels"])
+        available = sum(point is not None for point in candidate["xy_pixels"])
         print(
-            f"{candidate['candidate_id']}: {visible}/17 joints visible; "
+            f"{candidate['candidate_id']}: {available}/17 joint positions available (not verified visibility); "
             f"raw detector score={candidate['detector_score_raw']}"
         )
     print(f"result: {result_path.resolve()}")

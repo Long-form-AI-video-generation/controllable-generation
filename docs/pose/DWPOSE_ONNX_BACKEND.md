@@ -8,7 +8,10 @@ subject across frames.
 
 - Runs the YOLOX person detector at the configured input size. It applies the
   official score thresholds and non-maximum suppression, then returns each
-  person box with its raw objectness-times-class score.
+  person box with its raw objectness-times-class score. Boxes that cross the
+  source-image edges are clipped to those edges; fully outside or empty boxes
+  are discarded. The generic frame wrapper still rejects invalid backend boxes.
+  This box handling does not clip joint positions into apparently valid points.
 - Crops each person for the DWPose RTMPose model, applies the model's RGB
   normalization, decodes its SimCC outputs, and restores joint locations to the
   original frame.
@@ -88,8 +91,15 @@ It checks detector decoding, person scores, SimCC decoding, missing-point
 handling, coordinate restoration, hash verification, version checks and
 provider selection without requiring model weights or GPU libraries.
 
-The real model smoke test is still required on the server. Use one selected
-training or validation frame, save the model metadata, inspect the returned
-17-point overlay against the source image, and record empty detections, malformed
-boxes, and any missing joints. This verifies integration only; it does not
-establish anime pose accuracy or temporal identity consistency.
+The backend and wrapper passed 42 tests in the server environment. CPU smoke
+runs on anime video 02 completed, including boundary cases at frames 47 and 191.
+Visual review found inaccurate lower-body points, and frame 47 had four raw
+joint scores above 1. These results verify inference integration only, not anime
+pose accuracy, calibrated confidence, or temporal identity consistency. Follow
+the [record smoke runbook](SERVER_RECORD_SMOKE.md) for the pending record build.
+
+On a server without desktop graphics libraries, `opencv-python` may fail to import
+because `libGL.so.1` is missing. A separate environment with the matching
+`opencv-python-headless` wheel was verified on this server. Avoid installing both
+wheels in the same environment; they provide the same `cv2` module. The current
+record-building command uses retained results and does not import `cv2`.
