@@ -91,9 +91,50 @@ subject choice. The smoke result retains the original source metadata.
 Success means the CLI and independent validator both exit 0, the expected frame
 and candidate appear in the request, the audit files match their record hashes,
 and the configuration states `training_eligible: false`. The unit tests cover
-these boundaries with stand-in data. Actual execution of this command on the
-server, including real ffprobe timing verification, remains required before
-reporting a completed real record.
+these boundaries with stand-in data.
+
+## Confirmed server result — 2026-11-01
+
+The project lead ran the review checkout at commit
+`5dcb10079a6e4f3cb822ab5c76e45cec37ae7edd` on the server and supplied the terminal
+output and resulting record metadata in the project conversation.
+
+- All 70 pose-record tests and 42 DWPose tests passed without skips.
+- FFprobe 8.1.2 was installed in `controllable-gen` after a network timeout.
+- The real record was built from video `02`, shot `02_shot_0000`, source frame
+  47, explicitly selected `candidate_0`, in the frozen training partition.
+- Source metadata: 1280×720, 192 frames, timestamp-derived FPS
+  `24.000001005235646` (approximately 24 FPS). The builder's constant-timing
+  check passed; this is not a new frame-rate choice or video resampling.
+- A follow-up server check loaded the record with the validator, rebuilt it
+  from the retained request, and confirmed exact dictionary equality.
+- That check independently hashed `weights_manifest.json` and
+  `extraction_config.json` and matched both hashes against the record.
+- It confirmed 17 joints, all with null confidence and `valid: false`.
+
+Reported source and artifact hashes:
+
+```text
+video_sha256:          f57ce798813f6152bb94a21382f939637a321dc65bedb7a77686a7d6cf439e0e
+annotations_sha256:    98402f8a3a95689ce27437666a67615fb132f1397b5c1197e3f8d98f8afa7f89
+split_manifest_sha256: fbd3942e63fac76802816785f065aa1701a6933312ade6c01acd857796072cc9
+weights_sha256:        3567fbcf7fdd02f7e06bb6ad290b6dec22974a29f6f647a39f0f874ca2031fd4
+config_sha256:         f1718a20b3f3e2edd834fe51946540fc9ca3fd5bae54342bdf742b7e50da5dbc
+```
+
+The retained bundle is on the server at
+`/home/jovyan/jedidiah/controllable-generation/artifacts/pose-record-02-frame-47/`.
+It is not committed to Git. The final verification printed:
+
+```text
+PASS: record validation, audit hashes, and rebuild match.
+17 joints retained; confidence unavailable; no valid training joints.
+```
+
+This completes the one-frame pipeline check only. The legacy source-binding
+assumption, inaccurate leg landmarks, uncalibrated raw scores, and absence of
+temporal validation remain as documented above. A valid schema and reproducible
+build do not make this record eligible for training.
 
 ## Contributions and remaining work
 

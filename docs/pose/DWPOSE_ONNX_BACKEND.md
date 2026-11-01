@@ -96,7 +96,8 @@ runs on anime video 02 completed, including boundary cases at frames 47 and 191.
 Visual review found inaccurate lower-body points, and frame 47 had four raw
 joint scores above 1. These results verify inference integration only, not anime
 pose accuracy, calibrated confidence, or temporal identity consistency. Follow
-the [record smoke runbook](SERVER_RECORD_SMOKE.md) for the pending record build.
+the [record smoke runbook](SERVER_RECORD_SMOKE.md) for the completed one-frame
+record build, hash checks, and matching rebuild confirmed on 2026-11-01.
 
 On a server without desktop graphics libraries, `opencv-python` may fail to import
 because `libGL.so.1` is missing. A separate environment with the matching
