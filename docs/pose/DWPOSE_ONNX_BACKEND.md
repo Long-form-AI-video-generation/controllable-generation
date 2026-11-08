@@ -48,10 +48,14 @@ partial-body person. These are four synthetic input cases, not benchmark rates.
 Version `dwpose-onnx-coco17-v2` converts RGB to BGR only inside the detector.
 The public RGB interface, detector thresholds, and pose-estimator input policy
 remain unchanged. The new manifest produces a different configuration hash;
-historical RGB-detector runs and their hashes must remain identifiable. The full
-pipeline rerun and partial-body joint review remain pending at the time of this
-correction. Detector recovery alone does not establish accurate hidden joints
-or resolve the pose model's own input-policy validation and confidence handling.
+historical RGB-detector runs and their hashes must remain identifiable. The
+subsequent server rerun passed 113 tests and returned 1/1/3/0 detections for the
+full-body/partial-body/multiple-person/empty-image cases. Review confirmed the
+partial-body person was detected, but estimated lower-body points appeared on
+the counter covering the legs. Detector recovery alone does not establish
+accurate hidden joints or resolve the pose model's own input-policy validation
+and confidence handling. Details and before/after evidence are in the
+[synthetic case review](SYNTHETIC_CASE_REVIEW_2026-11-08.md).
 
 ## Configure on the model server
 

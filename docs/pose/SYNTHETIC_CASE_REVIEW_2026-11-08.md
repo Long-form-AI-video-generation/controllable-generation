@@ -103,3 +103,33 @@ records the detector color policy in the configuration manifest. Production
 thresholds stay 0.1 for proposals and 0.3 for accepted people. Full-pipeline
 regression on the same four cases, partial-body pose inspection, and any further
 pose-color/hidden-joint investigation are pending; do not report them as complete.
+
+## Corrected full-pipeline server rerun
+
+The project lead fetched commit `e05324a` and reran the four images with the
+normal 0.1 proposal floor and 0.3 person acceptance threshold. All 43 DWPose
+tests and 70 pose-record tests passed on the server. The detector now converts
+RGB source images to BGR internally; the existing RGB pose-estimator path was
+not changed. New configuration SHA-256:
+`f5785a98fdb89cdd32f9a7b4e0d0b27051b0ee6d43eb67745f4e41347cd7f212`.
+
+| Case | Corrected result | Review of supplied overlay |
+|---|---|---|
+| Full body | One candidate, 17 available positions, detector score 0.9362084865570068 | Body points remain broadly aligned; no quantitative anatomical accuracy claim. |
+| Partial body | One candidate, 16 available positions, detector score 0.9162177443504333 | The box encloses the visible person. Face and upper-body points appear broadly plausible. Lower-body positions extend onto the opaque counter despite the legs being hidden. |
+| Multiple people | Three candidates, 17 available positions each | Three separate skeletons remain broadly aligned. Foreground blue-shirt woman is now candidate_0, red-shirt person candidate_1, green-shirt person candidate_2. This ordering differs from the RGB baseline. |
+| No person | Zero candidates, no_detections | Empty room remains free of detected boxes or skeletons in this example. |
+
+Server results are retained in
+`/home/jovyan/jedidiah/controllable-generation/artifacts/pose-case-results/2026-11-08-bgr/`.
+The terminal log and four screenshots supplied by the project lead confirm
+completion and qualitative review. Local copies of the supplied screenshots
+are retained under `artifacts/pose-case-results/2026-11-08-bgr/review-screenshots/`.
+
+The detector recovery is confirmed for this partial-body image without lowering
+thresholds. Hidden-joint reliability remains unresolved: available in-frame
+coordinates, a high person-detection score and a drawn skeleton do not establish
+that a body part is visible or correctly located. The next diagnostic is to
+inspect the raw scores and invalid reasons for upper- versus lower-body joints
+in the full-body and partial-body results. No automatic occlusion filter,
+production confidence conversion or hidden-joint accuracy claim has been added.
