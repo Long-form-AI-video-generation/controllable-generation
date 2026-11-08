@@ -165,12 +165,15 @@ def _model_manifest(
     pose_output_names: Sequence[str],
 ) -> dict[str, Any]:
     settings = {
-        "implementation": "dwpose-onnx-co-co17-v1",
+        "implementation": "dwpose-onnx-coco17-v2",
+        "source_color_order": "RGB",
         "upstream": "https://github.com/IDEA-Research/DWPose",
         "detector": {
             "filename": Path(config.detector_path).name,
             "sha256": config.detector_sha256,
             "input_size_hw": list(config.detector_input_size),
+            "input_color_order": "BGR",
+            "box_policy": "clip_to_frame_edges_drop_empty_v1",
             "score_threshold": float(config.detection_score_threshold),
             "person_score_threshold": float(config.final_person_score_threshold),
             "nms_iou_threshold": float(config.nms_iou_threshold),
@@ -327,7 +330,7 @@ def _nms_indices(boxes: np.ndarray, scores: np.ndarray, threshold: float) -> lis
 
 
 class DWPoseONNXDetector:
-    """YOLOX person detector implementing ``detect(image_rgb)`` for the wrapper."""
+    """Accept RGB source images; feed BGR to the pinned DWPose YOLOX model."""
 
     def __init__(
         self,
@@ -352,7 +355,11 @@ class DWPoseONNXDetector:
 
     def detect(self, image: np.ndarray) -> list[dict[str, Any]]:
         height, width = _validate_rgb_image(image)
-        tensor, ratio = _letterbox_top_left(image, self.input_size_hw, self.cv2)
+        # The public wrapper uses RGB, but the pinned YOLOX model follows the
+        # upstream OpenCV/BGR detector path. Convert only for this detector;
+        # never alter the source array subsequently used by the pose estimator.
+        detector_image = np.ascontiguousarray(image[..., ::-1])
+        tensor, ratio = _letterbox_top_left(detector_image, self.input_size_hw, self.cv2)
         try:
             outputs = self.session.run(self.output_names or None, {self.input_name: tensor})
         except Exception as error:

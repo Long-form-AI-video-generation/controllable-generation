@@ -66,6 +66,28 @@ class FakeSession:
 
 
 class DWPoseDetectorTests(unittest.TestCase):
+    def test_rgb_source_feeds_bgr_detector_without_mutating_source(self):
+        class PreservePixelsCV2(FakeCV2):
+            @staticmethod
+            def resize(image, size_wh, interpolation):
+                if size_wh != (image.shape[1], image.shape[0]):
+                    raise AssertionError("test uses a source that needs no resize")
+                return image.copy()
+
+        session = FakeSession(np.zeros((1, 21, 6), dtype=np.float32))
+        detector = DWPoseONNXDetector(
+            session, input_size_hw=(32, 32), cv2_module=PreservePixelsCV2,
+        )
+        image = np.full((16, 32, 3), [10, 20, 30], dtype=np.uint8)
+        before = image.copy()
+
+        detector.detect(image)
+
+        tensor = session.feed["input"]
+        np.testing.assert_array_equal(tensor[0, :, 0, 0], [30, 20, 10])
+        self.assertTrue(np.all(tensor[0, :, 16:, :] == 114))
+        np.testing.assert_array_equal(image, before)
+
     def test_letterbox_shape_padding_and_channel_layout(self):
         image = np.full((16, 32, 3), [10, 20, 30], dtype=np.uint8)
         tensor, ratio = _letterbox_top_left(image, (32, 32), FakeCV2)
@@ -303,6 +325,10 @@ class ConfigAndFactoryTests(unittest.TestCase):
             self.assertEqual(len(runtime.calls), 2)
             self.assertEqual(wrapper.model_info["detector"]["sha256"], detector_hash)
             self.assertEqual(wrapper.model_info["pose"]["sha256"], pose_hash)
+            self.assertEqual(wrapper.model_info["implementation"], "dwpose-onnx-coco17-v2")
+            self.assertEqual(wrapper.model_info["source_color_order"], "RGB")
+            self.assertEqual(wrapper.model_info["detector"]["input_color_order"], "BGR")
+            self.assertEqual(wrapper.model_info["pose"]["input_color_order"], "RGB")
             self.assertRegex(wrapper.model_info["config_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(wrapper.model_info["runtime"]["requested_providers"],
                              ["CPUExecutionProvider"])
