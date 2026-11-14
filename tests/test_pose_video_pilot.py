@@ -30,6 +30,11 @@ class PoseVideoPilotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing source frames'):
             build_sequence(rows[:-1], 0, 5, 3, 50, 100, 1.0)
 
+    def test_nonfinite_sigma_is_rejected(self):
+        for sigma in (float('nan'), float('inf'), 0, -1):
+            with self.assertRaises(ValueError):
+                render_pose(result([10, 10]), 50, 100, sigma)
+
     def test_bad_coordinates_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'outside source frame'):
             render_pose(result([100, 2]), 50, 100, 1.0)

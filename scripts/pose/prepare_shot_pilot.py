@@ -38,10 +38,14 @@ def main():
     parser.add_argument('--size', type=int, default=128)
     parser.add_argument('--sigma', type=float, default=2.0)
     args = parser.parse_args()
-    if args.num_frames <= 0 or args.size <= 0 or args.sigma <= 0:
+    if (args.num_frames <= 0 or args.size <= 0
+            or not np.isfinite(args.sigma) or args.sigma <= 0):
         raise ValueError('frame count, size, and sigma must be positive')
     if args.output_dir.exists():
         raise FileExistsError(args.output_dir)
+    for value in (args.video_id, args.shot_id):
+        if not value or value in ('.', '..') or '/' in value or '\\' in value:
+            raise ValueError('video and shot IDs must be plain identifiers')
     annotations = json.loads(args.annotations.read_text())
     matches = [item for item in annotations if str(item.get('video_id')) == args.video_id
                and str(item.get('shot_id')) == args.shot_id]
@@ -100,6 +104,8 @@ def main():
         'model_info': selected[0]['model_info'],
         'code_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
         'shape_cthw': list(maps.shape), 'sigma_pixels': args.sigma,
+        'control_file_sha256': sha256(control),
+        'resize_policy': 'direct_resize_pixel_centres_v1',
         'channels': ['head', 'torso', 'limbs'],
         'candidate_counts': [len(result['candidates']) for result in selected],
         'policy': 'all detections; all in-frame positions; no calibrated visibility, score filtering or tracking',

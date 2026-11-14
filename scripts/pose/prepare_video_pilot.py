@@ -22,7 +22,8 @@ GROUPS = ((0, 1, 2, 3, 4), (5, 6, 11, 12), (7, 8, 9, 10, 13, 14, 15, 16))
 
 def render_pose(result, height, width, sigma):
     """Return grouped Gaussian keypoint maps in source-frame coordinates."""
-    if height <= 0 or width <= 0 or sigma <= 0:
+    if (not isinstance(height, int) or not isinstance(width, int)
+            or height <= 0 or width <= 0 or not np.isfinite(sigma) or sigma <= 0):
         raise ValueError('height, width and sigma must be positive')
     source_h, source_w = result['height'], result['width']
     if source_h <= 1 or source_w <= 1:
