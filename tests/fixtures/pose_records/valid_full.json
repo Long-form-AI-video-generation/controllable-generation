@@ -1,0 +1,197 @@
+{
+  "schema_version": "pose-pilot-v1",
+  "joint_names": [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle"
+  ],
+  "coordinate_space": "original_frame_normalized_pixel_centers",
+  "source": {
+    "video_id": "synthetic-video",
+    "shot_id": "synthetic-shot",
+    "video_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "annotations_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "split_manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "partition": "train",
+    "width": 832,
+    "height": 480,
+    "frame_count": 200,
+    "fps": 16.0,
+    "timing": "constant_fps"
+  },
+  "sampling": {
+    "start_frame": 100,
+    "end_frame": 101,
+    "num_frames": 1,
+    "policy": "shared_select_frame_indices_v1"
+  },
+  "extraction": {
+    "extractor_id": "synthetic-fixture",
+    "extractor_revision": "fixture-v1",
+    "mapping_revision": "body17-v1",
+    "preprocessing_revision": "identity-v1",
+    "subject_policy_revision": "single-subject-v1",
+    "weights_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "config_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "validity_threshold": 0.5
+  },
+  "frames": [
+    {
+      "source_frame_index": 100,
+      "subject_status": "selected",
+      "subject_id": "subject-0",
+      "joints": [
+        {
+          "xy": [
+            0.0,
+            1.0
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.0625,
+            0.9375
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.125,
+            0.875
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.1875,
+            0.8125
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.25,
+            0.75
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.3125,
+            0.6875
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.375,
+            0.625
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.4375,
+            0.5625
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.5,
+            0.5
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.5625,
+            0.4375
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.625,
+            0.375
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.6875,
+            0.3125
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.75,
+            0.25
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.8125,
+            0.1875
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.875,
+            0.125
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            0.9375,
+            0.0625
+          ],
+          "confidence": 0.9,
+          "valid": true
+        },
+        {
+          "xy": [
+            1.0,
+            0.0
+          ],
+          "confidence": 0.9,
+          "valid": true
+        }
+      ]
+    }
+  ]
+}

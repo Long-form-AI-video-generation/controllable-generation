@@ -1,12 +1,11 @@
 """Tests for ``pose-pilot-v1`` pose record validation.
 
-The supplied example records are not committed. To include them, point
-``POSE_FIXTURES_DIR`` at the folder that holds them, e.g.::
+The supplied example records are committed under tests/fixtures/pose_records.
+To use another copy, point ``POSE_FIXTURES_DIR`` at that folder, e.g.::
 
     POSE_FIXTURES_DIR=/path/to/examples python -m unittest discover -s tests -p 'test_pose_*.py' -v
 
-Without it, the example tests are skipped and every other test still runs
-against records built in this file.
+Without an override, the example tests use the committed records.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from src.pose_models.record_validation import CANONICAL_JOINT_NAMES, main
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-FIXTURES_DIR = os.environ.get("POSE_FIXTURES_DIR")
+FIXTURES_DIR = os.environ.get("POSE_FIXTURES_DIR", str(REPO_ROOT / "tests/fixtures/pose_records"))
 
 VALID_EXAMPLES = (
     "valid_full.json",
