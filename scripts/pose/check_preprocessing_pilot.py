@@ -10,13 +10,13 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import time
 
 import numpy as np
 
 from scripts.pose.prepare_video_pilot import build_sequence
 from src.data.frame_sampling import resolve_frame_interval
+from scripts.pose.bundle_io import code_provenance
 
 
 def file_hash(path):
@@ -91,6 +91,7 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--device', choices=('cpu', 'cuda'), default='cpu')
     args = parser.parse_args()
+    provenance = code_provenance(require_clean=False)
     if args.report.exists():
         raise FileExistsError(args.report)
     manifest, control_path = check_artifacts(args.bundle, args.videos_dir, args.annotations, args.split_manifest)
@@ -144,6 +145,8 @@ def main():
         raise ValueError(f'unexpected adapter shape: {tuple(signal.shape)}')
     if not torch.isfinite(features).all() or not torch.isfinite(signal).all():
         raise ValueError('model output is not finite')
+    if code_provenance(require_clean=False) != provenance:
+        raise RuntimeError('source code changed during diagnostic check')
     report = {
         'purpose': 'untrained legacy pose encoder and adapter dimensional compatibility',
         'training_eligible': False, 'wan_forward_tested': False, 'weights_updated': False,
@@ -154,7 +157,7 @@ def main():
         'finite_outputs': True, 'model_forward_seconds': time.perf_counter() - started,
         'bundle_manifest_sha256': file_hash(args.bundle / 'manifest.json'),
         'control_file_sha256': file_hash(control_path),
-        'code_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+        'code_commit': provenance['commit'], 'code_provenance': provenance,
         'limitations': 'Random weights; no quality, gradient, WAN injection or training eligibility claim.',
     }
     args.report.parent.mkdir(parents=True, exist_ok=True)
